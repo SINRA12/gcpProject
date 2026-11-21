@@ -1,0 +1,351 @@
+{
+  "uid": "infra-lab-path",
+  "title": "Request path: latency and errors by hop",
+  "description": "The same request seen at the load balancer, HAProxy and ingress-nginx.",
+  "tags": [
+    "infra-lab"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "p95 latency at each hop",
+      "description": "Read it from the top down: each hop sits closer to the app. A big gap between two lines is time spent between those two hops.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "stackdriver",
+            "uid": "gcm"
+          },
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "__PROJECT__",
+            "filters": [
+              "metric.type",
+              "=",
+              "loadbalancing.googleapis.com/https/total_latencies",
+              "AND",
+              "resource.type",
+              "=",
+              "https_lb_rule"
+            ],
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "groupBys": [],
+            "view": "FULL",
+            "preprocessor": "none"
+          },
+          "aliasBy": "1. Load balancer, total (client view)"
+        },
+        {
+          "datasource": {
+            "type": "stackdriver",
+            "uid": "gcm"
+          },
+          "refId": "B",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "__PROJECT__",
+            "filters": [
+              "metric.type",
+              "=",
+              "loadbalancing.googleapis.com/https/backend_latencies",
+              "AND",
+              "resource.type",
+              "=",
+              "https_lb_rule"
+            ],
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "groupBys": [],
+            "view": "FULL",
+            "preprocessor": "none"
+          },
+          "aliasBy": "2. Load balancer, backend part"
+        },
+        {
+          "refId": "C",
+          "expr": "avg(haproxy_backend_response_time_average_seconds) * 1000",
+          "legendFormat": "3. HAProxy average backend response",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket[5m]))) * 1000",
+          "legendFormat": "4a. ingress-nginx flight",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "E",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket[5m]))) * 1000",
+          "legendFormat": "4b. ingress-nginx payment",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-payment"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Requests per second at each hop",
+      "description": "The numbers should roughly agree. If one hop shows far fewer, requests are being dropped or answered before that point.",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "stackdriver",
+            "uid": "gcm"
+          },
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "__PROJECT__",
+            "filters": [
+              "metric.type",
+              "=",
+              "loadbalancing.googleapis.com/https/request_count",
+              "AND",
+              "resource.type",
+              "=",
+              "https_lb_rule"
+            ],
+            "crossSeriesReducer": "REDUCE_SUM",
+            "perSeriesAligner": "ALIGN_RATE",
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "groupBys": [],
+            "view": "FULL",
+            "preprocessor": "none"
+          },
+          "aliasBy": "1. Load balancer"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(haproxy_frontend_http_requests_total{proxy=\"main\"}[1m]))",
+          "legendFormat": "2. HAProxy",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(nginx_ingress_controller_requests[1m]))",
+          "legendFormat": "3a. ingress-nginx flight",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(nginx_ingress_controller_requests[1m]))",
+          "legendFormat": "3b. ingress-nginx payment",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-payment"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "5xx per second at each hop",
+      "description": "Errors that appear first at the load balancer but not lower down point at HAProxy or the load balancer itself.",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "stackdriver",
+            "uid": "gcm"
+          },
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "__PROJECT__",
+            "filters": [
+              "metric.type",
+              "=",
+              "loadbalancing.googleapis.com/https/request_count",
+              "AND",
+              "resource.type",
+              "=",
+              "https_lb_rule",
+              "AND",
+              "metric.label.response_code_class",
+              "=",
+              "500"
+            ],
+            "crossSeriesReducer": "REDUCE_SUM",
+            "perSeriesAligner": "ALIGN_RATE",
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "groupBys": [],
+            "view": "FULL",
+            "preprocessor": "none"
+          },
+          "aliasBy": "1. Load balancer"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(haproxy_frontend_http_responses_total{proxy=\"main\",code=\"5xx\"}[1m]))",
+          "legendFormat": "2. HAProxy",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m]))",
+          "legendFormat": "3a. ingress-nginx flight",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-flight"
+          }
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m]))",
+          "legendFormat": "3b. ingress-nginx payment",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-payment"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

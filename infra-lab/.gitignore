@@ -1,0 +1,11 @@
+# Terraform working files and state (state can contain secrets)
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+crash.log
+
+# Local variables (CI generates its own)
+lab.tfvars
+
+# Plan output written by CI
+plan.txt

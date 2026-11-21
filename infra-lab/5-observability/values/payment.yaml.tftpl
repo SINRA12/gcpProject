@@ -1,0 +1,21 @@
+# Payment cluster: Prometheus only. Grafana in the flight cluster queries it over the VPC
+# through an internal load balancer on a reserved private IP.
+prometheus:
+  service:
+    type: LoadBalancer
+    loadBalancerIP: ${payment_prometheus_ip}
+    annotations:
+      networking.gke.io/load-balancer-type: Internal
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: ingress-nginx
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ingress-nginx]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod

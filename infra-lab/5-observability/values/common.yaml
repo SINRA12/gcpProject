@@ -1,0 +1,52 @@
+# Settings shared by both clusters: a small Prometheus with no persistent disk
+# (data lives in the pod and is lost when it restarts, which is fine for a lab).
+fullnameOverride: kps
+
+# No alerting in this version, and GKE hides these control-plane components anyway
+defaultRules:
+  create: false
+alertmanager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
+
+# Fewer moving parts: no admission webhook jobs (so TLS for it is off too)
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 64Mi }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: 20m, memory: 48Mi }
+    limits: { memory: 128Mi }
+
+prometheus:
+  prometheusSpec:
+    retention: 12h
+    # Pick up ServiceMonitors/PodMonitors without needing a release label
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 150m, memory: 512Mi }
+      limits: { memory: 1Gi }
+
+grafana:
+  enabled: false

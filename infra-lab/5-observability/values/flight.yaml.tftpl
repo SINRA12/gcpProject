@@ -1,0 +1,81 @@
+# Flight cluster: Prometheus plus the one Grafana for the whole lab.
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+      # Request counts and latency histograms from this cluster's ingress-nginx pods
+      - job_name: ingress-nginx
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ingress-nginx]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      # HAProxy VMs: found through the Compute Engine API, scraped on port 8404
+      - job_name: haproxy
+        metrics_path: /metrics
+        gce_sd_configs:
+%{ for zone in zones }
+          - project: ${project_id}
+            zone: ${zone}
+            port: 8404
+            filter: 'name eq "haproxy-.*"'
+%{ endfor }
+        relabel_configs:
+          - source_labels: [__meta_gce_instance_name]
+            target_label: instance
+
+grafana:
+  enabled: true
+  adminUser: admin
+  # adminPassword is set by Terraform (random, see the grafana_admin_password output)
+  persistence:
+    enabled: false
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  grafana.ini:
+    server:
+      root_url: ${root_url}
+      serve_from_sub_path: true
+    users:
+      allow_sign_up: false
+    auth.anonymous:
+      enabled: false
+  # Served at /grafana through ingress-nginx, which HAProxy routes to this cluster
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    path: /grafana
+    pathType: Prefix
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+    datasources:
+      defaultDatasourceEnabled: false
+  additionalDataSources:
+    - name: Prometheus (flight)
+      type: prometheus
+      uid: prom-flight
+      access: proxy
+      url: http://kps-prometheus.monitoring.svc:9090
+      isDefault: true
+    - name: Prometheus (payment)
+      type: prometheus
+      uid: prom-payment
+      access: proxy
+      url: http://${payment_prometheus_ip}:9090
+    # Load balancer metrics already live in Cloud Monitoring. Grafana reads them using the
+    # GKE node's service account (the metadata server).
+    - name: Cloud Monitoring
+      type: stackdriver
+      uid: gcm
+      access: proxy
+      jsonData:
+        authenticationType: gce
+        defaultProject: ${project_id}

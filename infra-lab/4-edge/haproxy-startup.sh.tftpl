@@ -1,0 +1,65 @@
+#!/bin/bash
+# Runs on every HAProxy VM at boot. Rendered by Terraform with the ingress IPs.
+apt-get update && apt-get install -y haproxy
+cat > /etc/haproxy/haproxy.cfg <<'CFG'
+global
+    log /dev/log local0
+    maxconn 20000
+
+defaults
+    mode http
+    log global
+    option httplog
+    option forwardfor
+    timeout connect 5s
+    timeout client  60s
+    timeout server  30s
+
+frontend main
+    bind *:80
+    monitor-uri /haproxy-health
+    http-request set-header X-HAProxy-Node %[hostname]
+    acl is_flight  path_beg /flight
+    acl is_payment path_beg /payment
+    acl is_grafana path_beg /grafana
+    use_backend flight_cluster  if is_flight or is_grafana
+    use_backend payment_cluster if is_payment
+    default_backend no_match
+
+# Health checks target ingress-nginx's own /healthz (the endpoint it provides on port 80
+# for cloud health checks), with a Host header and HTTP/1.1. The old check, a bare
+# HTTP/1.0 "GET /flight/cart", was answered with a 308 redirect and so never failed.
+# This checks that ingress-nginx is alive, not any single app, so one broken app can
+# no longer take a whole backend (and /grafana) out of rotation.
+backend flight_cluster
+    option httpchk
+    http-check send meth GET uri /healthz ver HTTP/1.1 hdr Host haproxy-check
+    http-check expect status 200
+    server flight-ingress ${flight_ip}:80 check
+
+backend payment_cluster
+    option httpchk
+    http-check send meth GET uri /healthz ver HTTP/1.1 hdr Host haproxy-check
+    http-check expect status 200
+    server payment-ingress ${payment_ip}:80 check
+
+backend no_match
+    http-request deny deny_status 404
+CFG
+
+# Prometheus metrics on :8404/metrics (scraped by stage 5). Only added if this HAProxy
+# build has the built-in exporter, and dropped again if the config check fails, so a
+# problem here can never take the load balancer's backends down.
+if haproxy -vv | grep -q PROMEX; then
+  cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.base
+  cat >> /etc/haproxy/haproxy.cfg <<'CFG'
+
+frontend metrics
+    bind *:8404
+    no log
+    http-request use-service prometheus-exporter if { path /metrics }
+    http-request deny
+CFG
+  haproxy -c -q -f /etc/haproxy/haproxy.cfg || cp /etc/haproxy/haproxy.cfg.base /etc/haproxy/haproxy.cfg
+fi
+systemctl restart haproxy
