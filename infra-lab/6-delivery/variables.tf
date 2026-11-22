@@ -7,6 +7,12 @@ variable "state_bucket" {
   type        = string
 }
 
+variable "my_ips" {
+  description = "CIDRs allowed to reach the Jenkins web UI on its own public IP (HTTPS, port 8443). The same list as 4-edge uses for Cloud Armor. Empty: no firewall rule, so Jenkins is reachable only through the IAP tunnel."
+  type        = list(string)
+  default     = []
+}
+
 variable "ar_repo" {
   description = "Artifact Registry repository for the application images. lab.sh creates it once and ./lab.sh down leaves it, so the tag recorded in Git keeps pointing at an image that exists."
   type        = string
