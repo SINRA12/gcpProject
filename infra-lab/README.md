@@ -77,7 +77,7 @@ The full walkthrough, with testing, logs and troubleshooting, is in
 | --- | --- | --- |
 | `project_id`, `state_bucket` | from gcloud / `<project>-tfstate` | Where the lab runs and keeps Terraform state |
 | `region`, `zone` | `asia-southeast1`, `asia-southeast1-a` | Set `LAB_REGION` before the first `up` to change the generated file |
-| `my_ips` | this Cloud Shell's IP | CIDRs Cloud Armor lets through (only used when `enable_armor = true`) |
+| `my_ips` | this Cloud Shell's IP | CIDRs Cloud Armor lets through (used when `enable_armor = true`), and the only IPs that can open Jenkins on its public address (stage 6). Add your laptop's IP |
 | `node_machine_type` | `e2-standard-2` | GKE node size. `e2-medium` is cheaper but runs out of CPU with the monitoring stack (changing it recreates the clusters) |
 | `enable_armor` | `false` | Cloud Armor needs a quota that new projects often lack, see the runbook |
 | `enable_cloudflare` | `false` | Optional stage 3, see below |

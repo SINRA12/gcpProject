@@ -90,8 +90,13 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket, and (ful
   self-heal, prune) deploys. The tag is the git tree id of `apps/flight-booking-be`, so identical code gets the same
   tag and `bump-tag.sh` commits nothing twice; a gitops-only commit does not trigger a build. The image repository
   is passed to Argo CD by Terraform, so the project id stays out of Git. The tag starts as `unset`, so the pods sit
-  in `ImagePullBackOff` until the first Jenkins build. The service is Java 17 (Debian's JDK on the Jenkins VM, the
-  JDK on the owner's Mac, `distroless/java17`); bump `java.version` and the Jib base image together to move to 21 or 25.
+  in `ImagePullBackOff` until the first Jenkins build. The service is Java 17 (the
+  owner's Mac JDK, `distroless/java17`); bump `java.version` and the Jib base image together to move to 21 or 25.
+  The Jenkins VM is Debian 13 with JDK 21, because Jenkins 2.580 refuses to start on Java 17 (found live: the first
+  `up` used Debian 12 and JDK 17, and the service restarted in a loop). Maven compiles the app there with
+  `--release 17`; not yet confirmed on a live lab.
+  Jenkins has its own static public IP (`jenkins_url`, HTTPS 8443, self-signed certificate made at boot); the firewall
+  rule admits only `my_ips` (shared with Cloud Armor; no IPs = no rule) and the IAP tunnel still works. Unconfirmed live.
 - GitHub only runs workflows from the repository root's `.github/workflows/`, but ours sit in
   `infra-lab/.github/workflows/` (the repo root is the folder above `infra-lab/`), so `pr.yml` and `lab.yml` probably
   never run. Unverified; check the Actions tab. The repository is `SINRA12/gcpProject`, with no `tiketRakesh/gcpSetUp` references left in the docs.

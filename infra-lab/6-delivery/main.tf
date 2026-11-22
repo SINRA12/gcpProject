@@ -37,7 +37,8 @@ locals {
 
   image_repository = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/flight-booking-be"
 
-  # Pinned on purpose: bump deliberately. The checksum is published next to the download at
+  # Pinned on purpose: bump deliberately. This Jenkins needs Java 21 or 25 (the VM image and the JDK
+  # package in jenkins/startup.sh.tftpl follow from that). The checksum is published next to the download at
   # https://get.jenkins.io/war-stable/<version>/jenkins.war.sha256
   jenkins_version        = "2.580.2"
   jenkins_war_sha256     = "d98032d2401c540a35613a82ed358921fcf3166d5e6eaaaf60a7941845be3251"
@@ -100,6 +101,32 @@ resource "random_password" "jenkins" {
   special = false
 }
 
+# Jenkins' own public IP, so it can be reached from your laptop. It is not behind the load balancer.
+resource "google_compute_address" "jenkins" {
+  name         = "jenkins-ip"
+  region       = var.region
+  address_type = "EXTERNAL"
+}
+
+data "google_compute_subnetwork" "lab" {
+  self_link = local.p.subnet_self_link
+}
+
+# Only your IPs may connect, and only to the HTTPS port. With no IPs listed there is no rule at all,
+# and the only way in is the IAP tunnel.
+resource "google_compute_firewall" "jenkins_ui" {
+  count         = length(var.my_ips) > 0 ? 1 : 0
+  name          = "lab-allow-jenkins-ui"
+  network       = data.google_compute_subnetwork.lab.network
+  source_ranges = var.my_ips
+  target_tags   = ["jenkins"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8443"]
+  }
+}
+
 resource "google_compute_instance" "jenkins" {
   name                      = "jenkins"
   machine_type              = var.jenkins_machine_type
@@ -109,16 +136,21 @@ resource "google_compute_instance" "jenkins" {
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
+      # Debian 13, not 12: Jenkins 2.580 needs Java 21 or 25, and only Debian 13 packages JDK 21
+      image = "debian-cloud/debian-13"
       size  = 30
       type  = "pd-balanced"
     }
   }
 
-  # No access_config block = no public IP; downloads go out through Cloud NAT and you reach
-  # Jenkins through an IAP tunnel (the lab-allow-iap-ssh firewall rule already allows it)
+  # The access_config block gives the VM its own public IP. Who may connect is decided by the
+  # firewall rule above (your IPs only). The IAP tunnel (the lab-allow-iap-ssh rule) still works too.
   network_interface {
     subnetwork = local.p.subnet_self_link
+
+    access_config {
+      nat_ip = google_compute_address.jenkins.address
+    }
   }
 
   service_account {
@@ -133,11 +165,13 @@ resource "google_compute_instance" "jenkins" {
       plugin_manager_version = local.plugin_manager_version
       trivy_version          = local.trivy_version
       plugins                = file("${path.module}/jenkins/plugins.txt")
+      public_ip              = google_compute_address.jenkins.address
       jcasc = templatefile("${path.module}/jenkins/jenkins.yaml.tftpl", {
         project_id   = var.project_id
         region       = var.region
         ar_repo      = var.ar_repo
         git_repo_url = var.git_repo_url
+        jenkins_url  = "https://${google_compute_address.jenkins.address}:8443/"
       })
     })
 

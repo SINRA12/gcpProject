@@ -8,10 +8,11 @@ JENKINS_HOME=/var/lib/jenkins
 OPT=/opt/jenkins
 META=http://metadata.google.internal/computeMetadata/v1/instance/attributes
 
-echo "== Packages (JDK for Jenkins and for the Maven builds, git, python3 for the push script)"
+echo "== Packages (JDK 21 for Jenkins and for the Maven builds, git, python3 for the push script)"
+# Jenkins needs Java 21 or 25. The app still targets Java 17 (Maven compiles it with --release 17).
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y openjdk-17-jdk-headless git curl python3 fontconfig ca-certificates
+apt-get install -y openjdk-21-jdk-headless git curl python3 fontconfig ca-certificates
 
 echo "== jenkins user and folders"
 id jenkins >/dev/null 2>&1 || useradd --system --create-home --home-dir $JENKINS_HOME --shell /bin/bash jenkins
@@ -71,7 +72,20 @@ umask 077
 umask 022
 chown -R jenkins:jenkins $JENKINS_HOME
 
-echo "== Jenkins service (listens on localhost only: reach it through an IAP tunnel)"
+echo "== HTTPS certificate (self-signed, for the public address ${public_ip})"
+# Plain HTTP stays on localhost (the IAP tunnel). Anything coming over the internet uses HTTPS, so the
+# admin password is not sent in clear text. The certificate is self-signed, so browsers warn once.
+# The keystore password is not a secret worth protecting: the file is readable only by the jenkins user.
+mkdir -p $JENKINS_HOME/tls
+if [ ! -f $JENKINS_HOME/tls/keystore.p12 ]; then
+  keytool -genkeypair -alias jenkins -keyalg RSA -keysize 2048 -validity 825 \
+    -dname "CN=jenkins" -ext "san=ip:${public_ip}" \
+    -storetype PKCS12 -keystore $JENKINS_HOME/tls/keystore.p12 -storepass changeit
+fi
+chown -R jenkins:jenkins $JENKINS_HOME/tls
+chmod 600 $JENKINS_HOME/tls/keystore.p12
+
+echo "== Jenkins service (plain HTTP on localhost for the tunnel, HTTPS on all interfaces; the firewall limits who can connect)"
 cat > /etc/systemd/system/jenkins.service <<'UNIT'
 [Unit]
 Description=Jenkins
@@ -83,7 +97,7 @@ User=jenkins
 Environment=JENKINS_HOME=/var/lib/jenkins
 Environment=CASC_JENKINS_CONFIG=/var/lib/jenkins/casc
 EnvironmentFile=/etc/jenkins/secrets.env
-ExecStart=/usr/bin/java -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -jar /opt/jenkins/jenkins.war --httpPort=8080 --httpListenAddress=127.0.0.1
+ExecStart=/usr/bin/java -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -jar /opt/jenkins/jenkins.war --httpPort=8080 --httpListenAddress=127.0.0.1 --httpsPort=8443 --httpsListenAddress=0.0.0.0 --httpsKeyStore=/var/lib/jenkins/tls/keystore.p12 --httpsKeyStoreType=PKCS12 --httpsKeyStorePassword=changeit
 Restart=on-failure
 RestartSec=10
 

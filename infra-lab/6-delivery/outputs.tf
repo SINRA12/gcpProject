@@ -5,8 +5,13 @@ output "app_url" {
 
 output "image_repository" { value = local.image_repository }
 
+output "jenkins_url" {
+  description = "Jenkins on its own public IP: HTTPS with a self-signed certificate (the browser warns once), only reachable from the IPs in my_ips"
+  value       = "https://${google_compute_address.jenkins.address}:8443/"
+}
+
 output "jenkins_tunnel_command" {
-  description = "Run this, leave it open, then browse to http://localhost:8080 (in Cloud Shell: Web Preview on port 8080)"
+  description = "Alternative that works from anywhere you can run gcloud: run this, leave it open, then browse to http://localhost:8080 (in Cloud Shell: Web Preview on port 8080)"
   value       = "gcloud compute ssh jenkins --zone ${var.zone} --project ${var.project_id} --tunnel-through-iap -- -L 8080:localhost:8080"
 }
 
