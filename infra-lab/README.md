@@ -19,13 +19,15 @@ You need a GCP project with billing enabled and the Owner role on it.
 **First time only**, clone the repo and pick your project:
 
 ```bash
-git clone https://github.com/tiketRakesh/gcpSetUp.git
-cd gcpSetUp/infra-lab
+git clone https://github.com/SINRA12/gcpProject.git
+cd gcpProject/infra-lab
 gcloud config set project YOUR_PROJECT_ID
 ```
 
 (Until the feature branches are merged into `main`, clone the branch that has everything:
-`git clone --branch feat/observability https://github.com/tiketRakesh/gcpSetUp.git`.)
+`git clone --branch feat/app-delivery https://github.com/SINRA12/gcpProject.git`. Stage 6 is the
+exception: Jenkins and Argo CD read `main` on GitHub, not your clone, so merge before you run it.
+See the runbook, section 9.)
 
 **Then, every session, two commands:**
 
@@ -57,6 +59,10 @@ Grafana is at `http://LB_IP/grafana/` (user `admin`; `./lab.sh outputs observabi
 the generated password). It shows 4xx, 5xx and response time at the load balancer,
 HAProxy and ingress-nginx. See the observability section of the runbook.
 
+Stage 6 adds a delivery pipeline: Jenkins builds a sample Java service (`flight-booking-be`) and Argo CD
+deploys it to the flight cluster at `/flight/booking`. It needs a GitHub token first; see
+[Deploying an application](#deploying-an-application-jenkins-and-argo-cd).
+
 The full walkthrough, with testing, logs and troubleshooting, is in
 [docs/runbook.md](docs/runbook.md).
 
@@ -76,6 +82,9 @@ The full walkthrough, with testing, logs and troubleshooting, is in
 | `enable_armor` | `false` | Cloud Armor needs a quota that new projects often lack, see the runbook |
 | `enable_cloudflare` | `false` | Optional stage 3, see below |
 
+Not in `lab.tfvars`: `export GITHUB_TOKEN=...` (a token with write access to this repository) before
+`./lab.sh up`, so Jenkins can commit image tags. Without it, everything else still works.
+
 ## Stages
 
 | Stage | Creates | Reads from |
@@ -85,6 +94,7 @@ The full walkthrough, with testing, logs and troubleshooting, is in
 | `3-cloudflare` (optional) | Proxied DNS record to the load balancer IP, Cloudflare Origin CA certificate | 1 |
 | `4-edge` | HAProxy instance template + regional MIG, health check, load balancer chain, Cloud Armor (when enabled), HTTPS when Cloudflare is on | 1, 3 |
 | `5-observability` | Prometheus in both clusters, Grafana at `/grafana` on the public IP, dashboards as code | 1, 2 |
+| `6-delivery` | Jenkins VM (builds and pushes images), Argo CD in the flight cluster (deploys from Git), and the Argo CD Application for `flight-booking-be` | 1, 2, 5 |
 
 Each stage is its own Terraform root, because the Kubernetes and Helm providers need
 the clusters to exist before they can be configured. State lives in a GCS bucket
@@ -94,7 +104,7 @@ share it safely.
 ## Running one stage at a time
 
 Handy for learning: apply a stage, inspect it in the GCP console or with `gcloud`,
-then move on. A stage can be `1`-`5` or `platform`, `k8s`, `cloudflare`, `edge`, `observability`.
+then move on. A stage can be `1`-`6` or `platform`, `k8s`, `cloudflare`, `edge`, `observability`, `delivery`.
 
 ```bash
 ./lab.sh plan platform     # preview stage 1 only (read-only)
@@ -104,7 +114,8 @@ then move on. A stage can be `1`-`5` or `platform`, `k8s`, `cloudflare`, `edge`,
 ./lab.sh up k8s            # ingress-nginx + demo apps
 ./lab.sh up edge           # HAProxy and the load balancer
 ./lab.sh up observability  # Prometheus + Grafana + dashboards
-./lab.sh down observability  # tear down in reverse order, one stage at a time
+./lab.sh up delivery       # Jenkins + Argo CD (needs GITHUB_TOKEN, see below)
+./lab.sh down delivery     # tear down in reverse order, one stage at a time
 ```
 
 A stage refuses to run if the stage it reads from has not been applied, and
@@ -125,6 +136,27 @@ in `lab.tfvars` (or the matching GitHub variables), export `CLOUDFLARE_API_TOKEN
 (or add it as a GitHub secret), and run `up`. The DNS record follows the load
 balancer IP automatically on every rebuild.
 
+## Deploying an application (Jenkins and Argo CD)
+
+Stage 6 adds the two tools many teams use to ship an application, and a sample service to ship:
+
+```
+git push → Jenkins (test, build image, scan, push) → commits the new image tag to Git
+                                                          ↓
+                                  Argo CD (in the cluster) sees the commit and syncs → pods
+```
+
+| Piece | Where |
+| --- | --- |
+| Java service (Spring Boot 4, Java 17, Maven + Jib) and its `Jenkinsfile` | `../apps/flight-booking-be/` |
+| Helm chart, reusable for any Java service | `../charts/java-service/` |
+| What Argo CD deploys: image tag and settings | `../gitops/flight/flight-booking-be/values.yaml` |
+| Jenkins VM, registry access, Argo CD | `6-delivery/` |
+
+Jenkins never touches the cluster; Argo CD does the deploying, from Git. Setup, the GitHub token,
+the exercises (self-heal, rollback, a deliberate 5xx) and troubleshooting are in the
+[runbook, section 9](docs/runbook.md#9-deploying-an-application-jenkins-and-argo-cd).
+
 ## GitHub Actions (optional)
 
 The `PR` workflow runs checks and a plan on pull requests; the `Lab` workflow can build or
@@ -134,9 +166,9 @@ steps in `lab.sh` are skipped there.
 
 ## Cost
 
-GKE nodes and cluster fees, VMs, load balancer forwarding rules and NAT all bill by
-the hour. `./lab.sh down` removes everything. Keep a budget alert on the project. The
-state bucket stays and costs close to nothing.
+GKE nodes and cluster fees, VMs (HAProxy and Jenkins), load balancer forwarding rules and NAT all
+bill by the hour. `./lab.sh down` removes everything. Keep a budget alert on the project. The
+state bucket and the image registry stay and cost close to nothing.
 
 ## Troubleshooting
 

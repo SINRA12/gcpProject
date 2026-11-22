@@ -4,6 +4,7 @@
 #   2. a service account Terraform runs as in GitHub Actions
 #   3. Workload Identity Federation so GitHub Actions can act as that
 #      service account without any stored key
+#   4. the Artifact Registry repository for application images (same as lab.sh creates locally)
 #
 # Usage: ./bootstrap/setup-gcp.sh <project-id> <github-owner/repo> [region]
 set -euo pipefail
@@ -17,6 +18,7 @@ SA_NAME="terraform-ci"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 POOL="github"
 PROVIDER="github-provider"
+REGISTRY_REPO="lab-apps"
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
@@ -25,7 +27,8 @@ echo "== Enabling APIs"
 gcloud services enable \
   compute.googleapis.com container.googleapis.com storage.googleapis.com \
   iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com \
-  cloudresourcemanager.googleapis.com serviceusage.googleapis.com
+  cloudresourcemanager.googleapis.com serviceusage.googleapis.com \
+  artifactregistry.googleapis.com
 
 echo "== State bucket gs://$BUCKET"
 if ! gcloud storage buckets describe "gs://$BUCKET" >/dev/null 2>&1; then
@@ -41,13 +44,21 @@ gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1 || \
 
 # Broad enough to build and destroy this lab. Fine for a personal lab project;
 # a real team would scope these much more tightly.
+# (artifactregistry.admin and serviceAccountAdmin are for stage 6: it creates the Jenkins service
+# account and grants it access to the registry)
 for ROLE in roles/compute.admin roles/container.admin \
-            roles/iam.serviceAccountUser roles/serviceusage.serviceUsageAdmin; do
+            roles/iam.serviceAccountUser roles/serviceusage.serviceUsageAdmin \
+            roles/artifactregistry.admin roles/iam.serviceAccountAdmin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SA_EMAIL" --role="$ROLE" --condition=None >/dev/null
 done
 gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
   --member="serviceAccount:$SA_EMAIL" --role=roles/storage.objectAdmin >/dev/null
+
+echo "== Artifact Registry repository $REGISTRY_REPO"
+gcloud artifacts repositories describe "$REGISTRY_REPO" --location="$REGION" >/dev/null 2>&1 || \
+  gcloud artifacts repositories create "$REGISTRY_REPO" --repository-format=docker \
+    --location="$REGION" --description="Images for the lab applications"
 
 echo "== Workload Identity Federation for $REPO"
 gcloud iam workload-identity-pools describe "$POOL" --location=global >/dev/null 2>&1 || \

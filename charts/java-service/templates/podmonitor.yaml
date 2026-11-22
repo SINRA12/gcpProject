@@ -1,0 +1,16 @@
+{{- if .Values.metrics.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "java-service.name" . }}
+  labels:
+    {{- include "java-service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "java-service.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: management
+      path: {{ .Values.metrics.podMonitor.path }}
+      interval: {{ .Values.metrics.podMonitor.interval }}
+{{- end }}

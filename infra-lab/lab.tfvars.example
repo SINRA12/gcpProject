@@ -26,3 +26,10 @@ enable_cloudflare  = false
 domain             = "example.com"
 cloudflare_zone_id = "your-zone-id"
 record_name        = "lab"
+
+# Delivery stage (6): Jenkins builds the sample Java service, Argo CD deploys it.
+# Not set here: export GITHUB_TOKEN (write access to the repository) before ./lab.sh up, so Jenkins can
+# commit image tags. See docs/runbook.md, section 9. Optional overrides:
+# git_repo_url         = "https://github.com/SINRA12/gcpProject.git"
+# gitops_revision      = "main"    # a branch name, to try the chart before merging (Jenkins only tags main)
+# jenkins_machine_type = "e2-standard-2"

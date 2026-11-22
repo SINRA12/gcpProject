@@ -1,0 +1,17 @@
+# What runs for flight-booking-be in the flight cluster. Argo CD watches this file.
+#
+# image.tag is written by Jenkins after each successful build (one commit per new version).
+# Do not edit it by hand unless you mean to deploy or roll back to that exact image.
+# image.repository is not here on purpose: Terraform passes it to Argo CD, so the GCP project
+# id stays out of Git.
+image:
+  tag: "unset"
+
+replicaCount: 2
+
+# Demo knobs, read by the app (see apps/flight-booking-be/src/main/resources/application.properties).
+# Change one, commit, and Argo CD rolls it out: that is how you create 5xx or slow requests on purpose.
+env:
+  BOOKING_FAILURE_RATE: "0.0"
+  BOOKING_DECLINE_RATE: "0.05"
+  BOOKING_LATENCY_MS: "0"

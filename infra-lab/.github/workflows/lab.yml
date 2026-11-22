@@ -36,6 +36,8 @@ jobs:
       CF_DOMAIN: ${{ vars.CF_DOMAIN }}
       CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Stage 6: lets Jenkins commit image tags (a token with write access to this repository)
+      GITHUB_TOKEN: ${{ secrets.LAB_GIT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 

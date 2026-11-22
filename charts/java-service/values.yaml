@@ -1,0 +1,57 @@
+# Defaults for the java-service chart. A service overrides what it needs in its own values
+# file (for flight-booking-be: gitops/flight/flight-booking-be/values.yaml).
+# Every object is named after the Helm release, which for Argo CD is the Application name.
+
+replicaCount: 2
+
+image:
+  # Both are required. The repository is passed in by Argo CD (set from Terraform, so the GCP
+  # project id never sits in Git) and the tag is written into the service's values file by Jenkins.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The app listens on two ports: traffic, and health + metrics (kept apart so the ingress never
+# exposes /actuator).
+containerPort: 8080
+managementPort: 9090
+
+service:
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  # Neither HAProxy nor ingress-nginx rewrites paths, so the app serves this prefix itself.
+  path: /flight/booking
+  pathType: Prefix
+
+# Environment variables for the container, as name: value
+env: {}
+
+# JVM apps need real memory: the heap is 70% of the limit (see -XX:MaxRAMPercentage in the image).
+# CPU has a request but no limit, so startup can burst while the scheduler still reserves a little.
+resources:
+  requests:
+    cpu: 50m
+    memory: 384Mi
+  limits:
+    memory: 512Mi
+
+# Keep replicas on different nodes. DoNotSchedule is strict: a pod waits (Pending) rather than
+# share a node. Use ScheduleAnyway for "try, but never block".
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: DoNotSchedule
+
+# Needs the PodMonitor CRD, which the monitoring stack (stage 5) installs
+metrics:
+  podMonitor:
+    enabled: true
+    interval: 30s
+    path: /actuator/prometheus
+
+pdb:
+  enabled: true
+  minAvailable: 1

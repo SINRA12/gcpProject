@@ -1,0 +1,96 @@
+#!/bin/bash
+# Runs on the Jenkins VM at every boot. Terraform fills in the placeholders (versions, plugin list, config).
+# Safe to run again: downloads are skipped when the file is already there.
+# Log: sudo journalctl -u google-startup-scripts
+set -euo pipefail
+
+JENKINS_HOME=/var/lib/jenkins
+OPT=/opt/jenkins
+META=http://metadata.google.internal/computeMetadata/v1/instance/attributes
+
+echo "== Packages (JDK for Jenkins and for the Maven builds, git, python3 for the push script)"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y openjdk-17-jdk-headless git curl python3 fontconfig ca-certificates
+
+echo "== jenkins user and folders"
+id jenkins >/dev/null 2>&1 || useradd --system --create-home --home-dir $JENKINS_HOME --shell /bin/bash jenkins
+mkdir -p $OPT $JENKINS_HOME/casc $JENKINS_HOME/plugins /etc/jenkins
+
+echo "== Jenkins ${jenkins_version}"
+if [ ! -f $OPT/jenkins.war ]; then
+  curl -fsSL -o $OPT/jenkins.war.tmp https://get.jenkins.io/war-stable/${jenkins_version}/jenkins.war
+  echo "${jenkins_war_sha256}  $OPT/jenkins.war.tmp" | sha256sum -c -
+  mv $OPT/jenkins.war.tmp $OPT/jenkins.war
+fi
+
+echo "== Plugins"
+cat > $OPT/plugins.txt <<'PLUGINS'
+${plugins}
+PLUGINS
+if [ ! -f $OPT/plugin-manager.jar ]; then
+  curl -fsSL -o $OPT/plugin-manager.jar \
+    https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/${plugin_manager_version}/jenkins-plugin-manager-${plugin_manager_version}.jar
+fi
+chown -R jenkins:jenkins $JENKINS_HOME
+if [ ! -f $JENKINS_HOME/.plugins-installed ]; then
+  # Picks the newest version of each plugin that works with this Jenkins, plus what they depend on
+  runuser -u jenkins -- java -jar $OPT/plugin-manager.jar \
+    --war $OPT/jenkins.war \
+    --plugin-file $OPT/plugins.txt \
+    --plugin-download-directory $JENKINS_HOME/plugins
+  touch $JENKINS_HOME/.plugins-installed
+fi
+
+echo "== Trivy ${trivy_version} (image scanner)"
+if ! command -v trivy >/dev/null; then
+  cd "$(mktemp -d)"
+  base=https://github.com/aquasecurity/trivy/releases/download/v${trivy_version}
+  curl -fsSLO $base/trivy_${trivy_version}_Linux-64bit.tar.gz
+  curl -fsSLO $base/trivy_${trivy_version}_checksums.txt
+  sha256sum --ignore-missing -c trivy_${trivy_version}_checksums.txt
+  tar -xzf trivy_${trivy_version}_Linux-64bit.tar.gz trivy
+  install -m 0755 trivy /usr/local/bin/trivy
+  cd /
+fi
+
+echo "== Jenkins configuration (Configuration as Code)"
+cat > $JENKINS_HOME/casc/jenkins.yaml <<'JCASC'
+${jcasc}
+JCASC
+
+# The two secrets reach the VM as instance metadata. They go into a file only root can read, which
+# systemd loads as environment variables for Jenkins.
+ADMIN_PASSWORD=$(curl -fsS -H 'Metadata-Flavor: Google' $META/jenkins-admin-password)
+GITHUB_TOKEN=$(curl -fsS -H 'Metadata-Flavor: Google' $META/github-token || true)
+umask 077
+{
+  echo "ADMIN_PASSWORD=$ADMIN_PASSWORD"
+  if [ -n "$GITHUB_TOKEN" ]; then echo "GITHUB_TOKEN=$GITHUB_TOKEN"; fi
+} > /etc/jenkins/secrets.env
+umask 022
+chown -R jenkins:jenkins $JENKINS_HOME
+
+echo "== Jenkins service (listens on localhost only: reach it through an IAP tunnel)"
+cat > /etc/systemd/system/jenkins.service <<'UNIT'
+[Unit]
+Description=Jenkins
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jenkins
+Environment=JENKINS_HOME=/var/lib/jenkins
+Environment=CASC_JENKINS_CONFIG=/var/lib/jenkins/casc
+EnvironmentFile=/etc/jenkins/secrets.env
+ExecStart=/usr/bin/java -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -jar /opt/jenkins/jenkins.war --httpPort=8080 --httpListenAddress=127.0.0.1
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable jenkins
+systemctl restart jenkins
+echo "== Done. Jenkins is starting on 127.0.0.1:8080"

@@ -1,0 +1,75 @@
+# Jenkins Configuration as Code: everything you would otherwise click through in the Jenkins UI.
+# Terraform fills in the project, region and repository below. ADMIN_PASSWORD and GITHUB_TOKEN are
+# left for Jenkins itself to read from environment variables (they come from the VM's metadata).
+
+jenkins:
+  systemMessage: "Lab CI. Builds and publishes flight-booking-be; Argo CD deploys it. Configured by infra-lab/6-delivery."
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "$${ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  # Read by the Jenkinsfile, so it holds nothing specific to one project
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "GCP_PROJECT"
+            value: "${project_id}"
+          - key: "AR_REGION"
+            value: "${region}"
+          - key: "AR_REPO"
+            value: "${ar_repo}"
+          - key: "GITOPS_REPO_URL"
+            value: "${git_repo_url}"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+
+# The job below is defined from this file, not from the UI, so Job DSL scripts are allowed to run
+security:
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "github-push"
+              username: "jenkins"
+              password: "$${GITHUB_TOKEN:-not-set}"
+              description: "Push access to the repository, used only to commit the new image tag"
+
+# One pipeline: look at every branch of the repository, build the ones that have a Jenkinsfile
+jobs:
+  - script: |
+      multibranchPipelineJob('flight-booking-be') {
+        branchSources {
+          git {
+            id('flight-booking-be')
+            remote('${git_repo_url}')
+          }
+        }
+        factory {
+          workflowBranchProjectFactory {
+            scriptPath('apps/flight-booking-be/Jenkinsfile')
+          }
+        }
+        orphanedItemStrategy {
+          discardOldItems {
+            numToKeep(5)
+          }
+        }
+        triggers {
+          periodicFolderTrigger {
+            interval('2m')
+          }
+        }
+      }

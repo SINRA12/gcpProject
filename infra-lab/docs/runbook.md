@@ -12,8 +12,8 @@ run `./lab.sh up` to build and `./lab.sh down` to destroy. This page is the long
 ## 2. Set up from scratch
 
 ```bash
-git clone https://github.com/tiketRakesh/gcpSetUp.git
-cd gcpSetUp/infra-lab
+git clone https://github.com/SINRA12/gcpProject.git
+cd gcpProject/infra-lab
 gcloud config set project YOUR_PROJECT_ID
 ./lab.sh up
 ```
@@ -28,8 +28,10 @@ once done:
 | Enable Cloud Resource Manager + Service Usage APIs | Terraform needs them to enable the other APIs. A fresh project has them off, which gives `Error 403 ... Cloud Resource Manager API has not been used`. |
 | Create the state bucket | Terraform keeps its record of what exists there (versioned, so a bad apply can be recovered). |
 
-Then it applies the five stages in order (about 20-30 minutes in total). When it finishes it prints
-the load balancer IP.
+Then it applies the six stages in order (about 25-35 minutes in total). When it finishes it prints
+the load balancer IP. Stage 6 (Jenkins and Argo CD) needs a GitHub token and the code on `main`: read
+[section 9](#9-deploying-an-application-jenkins-and-argo-cd) before the first `up` that includes it.
+`up` also creates the Artifact Registry repository `lab-apps` (once; `down` leaves it).
 
 ## 3. Test it
 
@@ -103,6 +105,7 @@ gcloud compute backend-services get-health haproxy-backend --global
 ./lab.sh up k8s
 ./lab.sh up edge
 ./lab.sh up observability
+./lab.sh up delivery
 ```
 
 After stage 1, compare the Terraform with the console: VPC network → `lab-vpc`, Cloud NAT,
@@ -125,7 +128,7 @@ Ingress IPs are internal, so test a cluster from inside it, or tunnel with
 ./lab.sh down
 ```
 
-Destroys observability, edge, k8s, then platform (before platform it waits, up to 5 minutes, until GKE has
+Destroys delivery, observability, edge, k8s, then platform (before platform it waits, up to 5 minutes, until GKE has
 removed the internal load balancer pieces it created, so the VPC can be deleted). Check nothing is left:
 
 ```bash
@@ -136,7 +139,8 @@ gcloud compute forwarding-rules list
 gcloud compute addresses list
 ```
 
-What stays on purpose: the state bucket, the enabled APIs and Cloud Logging data.
+What stays on purpose: the state bucket, the Artifact Registry repository `lab-apps` with its images (Git
+records which tag should run, so the image must outlive the lab), the enabled APIs and Cloud Logging data.
 Check Billing → Reports the next day to confirm charges stopped.
 
 ## 7. Cloud Armor
@@ -238,6 +242,146 @@ For latency, `whoami` can delay its reply: add `?wait=800ms` to a path in the tr
 Grafana is public while Cloud Armor is off. It needs the generated password and has sign-up and anonymous
 access disabled, but turn Armor on (section 7) or use the port-forward if you leave the lab running.
 
+## 9. Deploying an application (Jenkins and Argo CD)
+
+Stage 6 sets up a delivery pipeline for a sample Java service, `flight-booking-be`. It uses the split many
+companies use: **Jenkins is CI** (turns a commit into a tested, scanned image) and **Argo CD is CD** (makes the
+cluster match what Git says). The hand-over between them is one commit.
+
+```
+push to main
+   |
+   v
+Jenkins (its own VM) looks at Git every 2 minutes
+   |  mvn test -> build the image -> Trivy scan -> push to Artifact Registry
+   |  last step: commit "gitops: flight-booking-be -> <tag>", which edits
+   v
+gitops/flight/flight-booking-be/values.yaml   <-- Argo CD (in the flight cluster) checks Git every minute
+                                                    |  renders charts/java-service with that file
+                                                    v
+                                      Deployment, Service, Ingress, PodMonitor, PodDisruptionBudget
+browser -> load balancer -> HAProxy -> ingress-nginx -> flight-booking-be pods   (/flight/booking)
+```
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Java service | `apps/flight-booking-be/` | Spring Boot 4 on Java 17. `POST /flight/booking/bookings` makes a pretend booking and counts it (`bookings_total{result}`, `booking_amount_total`, `booking_duration_seconds`). Health and metrics are on port 9090, never through the ingress. |
+| Pipeline | `apps/flight-booking-be/Jenkinsfile`, `ci/*.sh` | Test, build with Jib (no Docker needed), scan, push, commit the tag. The tag is a fingerprint of the app folder, so identical code gets the identical tag and nothing is committed twice. |
+| Chart | `charts/java-service/` | One reusable chart: probes, resources, non-root and read-only filesystem, a rolling update with no gap, replicas kept on different nodes, a PodMonitor for Prometheus, a PodDisruptionBudget. |
+| What runs | `gitops/flight/flight-booking-be/values.yaml` | The image tag (written by Jenkins) and the settings. Argo CD watches this file. |
+| Jenkins + Argo CD | `6-delivery/` | A Jenkins VM configured entirely as code, Argo CD installed slim in the flight cluster, and the Argo CD Application. |
+
+Jenkins has no access to the cluster: its service account can only write to the registry. Argo CD runs inside
+the cluster, so nothing outside needs credentials to deploy.
+
+### Before the first run
+
+1. **Merge to `main` on GitHub.** Jenkins and Argo CD read GitHub's `main` branch, not your laptop or your clone.
+   (To try the chart from a branch, set `gitops_revision = "feat/app-delivery"` in `lab.tfvars`; Jenkins only
+   records tags on `main`, so the pipeline's last two steps do nothing on a branch.)
+2. **Create a GitHub token** so Jenkins can commit the tag: GitHub, Settings, Developer settings, Personal access
+   tokens, Fine-grained tokens, Generate new token. Repository access: only `SINRA12/gcpProject`. Permissions:
+   Repository permissions, **Contents: Read and write**. Choose a short expiry. Then, in Cloud Shell, paste it at
+   the silent prompt (it stays out of your shell history and out of any file):
+
+```bash
+read -rs GITHUB_TOKEN && export GITHUB_TOKEN
+```
+
+3. Run `./lab.sh up` (or `./lab.sh up delivery` if stages 1, 2 and 5 are already up). The token reaches only
+   Terraform's state and the Jenkins VM; never commit it. Without it, stage 6 still builds and pushes images, but
+   nothing new is ever deployed.
+
+### What happens after `up`
+
+| About | What |
+| --- | --- |
+| 0-2 min | Argo CD is installed and syncs the Application. The pods fail with `ImagePullBackOff`, because the tag in Git is still `unset`. That is expected. |
+| 3-6 min | The Jenkins VM finishes installing (JDK, Jenkins, plugins, Trivy) and Jenkins starts. |
+| +2 min | Jenkins finds the repository (it scans every 2 minutes) and builds `main`. The first build is slow (about 5-8 minutes): Maven and Trivy download what they need. |
+| then | Jenkins commits the new tag. Within about a minute Argo CD rolls the pods one at a time. `./lab.sh test` now shows `/flight/booking/` as 200. |
+
+Logins and commands: `./lab.sh outputs delivery` prints both passwords and these commands.
+
+```bash
+# Jenkins: run the tunnel command from the outputs, leave it open, then open http://localhost:8080
+# (Cloud Shell: Web Preview, change the port to 8080). User admin.
+gcloud compute ssh jenkins --zone ZONE --project PROJECT --tunnel-through-iap -- -L 8080:localhost:8080
+
+# Argo CD: point kubectl at the flight cluster once, then forward the port and open http://localhost:8081
+# (Cloud Shell: Web Preview on port 8081). User admin.
+gcloud container clusters get-credentials flight-cluster --zone ZONE --project PROJECT
+kubectl port-forward -n argocd svc/argocd-server 8081:80
+```
+
+In Jenkins, open `flight-booking-be`, then `main`, then Console Output. **Scan Repository Now** skips the
+2-minute wait. In Argo CD, open the `flight-booking-be` application to see the objects and their health.
+
+### Try it
+
+```bash
+curl http://LB_IP/flight/booking/                         # which version, on which pod; repeat to see both pods
+curl -X POST -H 'Content-Type: application/json' -d '{"flight":"GA123","passengers":2}' \
+  http://LB_IP/flight/booking/bookings                    # 201 confirmed, 402 declined (5% of calls) or 500
+curl -X POST -H 'Content-Type: application/json' -d '{"flight":"GA123","passengers":2}' \
+  'http://LB_IP/flight/booking/bookings?simulate=error&delayMs=300'    # force an outcome and a delay
+```
+
+In Grafana, Explore, data source `Prometheus (flight)` (business numbers come from the app itself, section 8 shows
+the technical ones):
+
+```
+sum by (result) (rate(bookings_total[5m]))
+sum(rate(booking_amount_total[5m])) * 60
+histogram_quantile(0.95, sum by (le) (rate(booking_duration_seconds_bucket[5m])))
+```
+
+The Apps dashboard should also list `flight-booking-be`, from ingress-nginx's own request metrics.
+
+### Exercises
+
+1. **Ship a change.** Change the app (for example a message in `BookingController`), push to `main`. Jenkins builds,
+   commits a new tag, and Argo CD rolls the pods. Watch with `kubectl get pods -n flight-booking-be-ns -w`; the new
+   version shows in `curl .../flight/booking/`. Then change only `gitops/.../values.yaml` (for example
+   `BOOKING_LATENCY_MS: "300"`): Argo CD rolls it, but Jenkins builds nothing, because that commit only touches `gitops/`.
+2. **Self-heal.** `kubectl scale deploy flight-booking-be -n flight-booking-be-ns --replicas=5`. Argo CD notices that the
+   cluster no longer matches Git and scales it back to 2.
+3. **Roll back.** `git revert` the latest `gitops: flight-booking-be -> ...` commit and push. Argo CD redeploys the
+   previous tag (its image is still in the registry).
+4. **Make a 5xx on purpose.** Set `BOOKING_FAILURE_RATE: "0.3"` in the values file, push, wait for the rollout, then run
+   a POST loop and watch the technical panels and `bookings_total{result="error"}` together:
+
+```bash
+while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -d '{"flight":"GA123","passengers":2}' http://LB_IP/flight/booking/bookings; sleep 0.5; done
+```
+
+5. **Spread.** `kubectl get pods -n flight-booking-be-ns -o wide`: the two replicas are on different nodes (the chart's
+   topology spread rule). Cordon one node (`kubectl cordon NODE`) and delete a pod to see the strict rule leave it
+   `Pending`; `kubectl uncordon NODE` lets it schedule.
+
+### Troubleshooting delivery
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Cannot reach Jenkins through the tunnel | The VM is still installing. SSH in (`gcloud compute ssh jenkins --zone ZONE --tunnel-through-iap`), then `sudo journalctl -u google-startup-scripts -n 50 --no-pager` for the install, `sudo systemctl status jenkins` and `sudo journalctl -u jenkins -n 50 --no-pager`. |
+| The `flight-booking-be` job is missing | The Configuration as Code file failed to load. `sudo journalctl -u jenkins \| grep -i -E 'casc\|configuration'` on the VM; in Jenkins, Manage Jenkins, Configuration as Code shows the same. |
+| Job exists but there is no build on `main` | `main` on GitHub does not have `apps/flight-booking-be/Jenkinsfile` yet (not merged), or press Scan Repository Now. |
+| Stage "Build image and scan" fails | Either Trivy found a CRITICAL vulnerability with a fix (the log lists it: bump the base image or a dependency), or it could not download its database. For the second, re-run the build. To loosen the gate, edit `--severity` in the `Jenkinsfile`. |
+| "Push image" fails with 401 or 403 | The Jenkins service account lacks `roles/artifactregistry.writer` on the repository, or the repository does not exist: `gcloud artifacts repositories list --location REGION`, and run `./lab.sh up delivery` again. |
+| "Record new tag in Git" says no token was given | `GITHUB_TOKEN` was not set when stage 6 ran. Export it and run `./lab.sh up delivery` (this updates the VM's metadata), then on the VM `sudo google_metadata_script_runner startup` so Jenkins reads it. |
+| The same stage fails with a Git permission error (403) | The token is expired, is for another repository, or lacks Contents: Read and write. If `main` is protected, the push is refused: allow this token to bypass, or leave `gitops/` unprotected in a lab. |
+| Application `OutOfSync` or `ComparisonError` in Argo CD | `kubectl describe application -n argocd flight-booking-be`. Usual causes: the repository or path is not on `main` yet, or a chart error (`helm template charts/java-service --set image.repository=x --set image.tag=y` shows it). |
+| Pods in `ImagePullBackOff` | The tag in Git is still `unset` (Jenkins has not recorded one: see its build), or the nodes cannot read the registry: `kubectl describe pod -n flight-booking-be-ns` shows the pull error. The nodes use the default compute service account, which stage 6 grants `artifactregistry.reader`. |
+| Sync error `no matches for kind "PodMonitor"` | Stage 5 (the monitoring chart installs that CRD) is not applied. |
+| A pod stays `Pending` with a topology spread message | One node cannot fit it (CPU) while the rule forbids sharing a node. Free some CPU, add a node, or set `topologySpread.whenUnsatisfiable: ScheduleAnyway` in the values file. |
+| Pod `OOMKilled` | Raise `resources.limits.memory` in the values file (the heap is 70% of the limit). |
+
+Lab shortcuts to know about: the Jenkins admin password and the GitHub token travel as instance metadata (a team would
+keep them in Secret Manager); Jenkins plugins are installed at their newest compatible version on the first boot, not
+pinned (list them afterwards in Manage Jenkins, Plugins, and pin them); Jenkins listens on localhost only and builds on
+its own VM; Argo CD runs without TLS because the only way in is `kubectl port-forward`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -287,9 +431,17 @@ check, firewall rule. Use `--region` or `--zone` as the list output shows, then 
   the old ones. Watch it with `gcloud compute instance-groups managed list-instances haproxy-mig --region asia-southeast1`.
 - **Prometheus data is not kept.** 12 hours, in the pod, no disk.
 - **Cloud Armor is off by default**, so the load balancer and Grafana are reachable from the internet (section 7).
+- **Delivery reads GitHub, not your machine.** Jenkins and Argo CD follow `main`; Jenkins commits image tags straight
+  to `main` with no pull request (fine for a lab, blocked by branch protection). Jenkins polls every 2 minutes and
+  Argo CD checks every minute, so a push takes a few minutes to arrive.
+- **The first build after `up` is slow and the first sync fails on purpose**: the pods wait in `ImagePullBackOff`
+  until Jenkins has recorded a real tag (section 9). Later `up`s deploy the recorded tag at once, because the
+  registry keeps the image.
+- **Stage 6 has not been confirmed on a live lab yet**: the Jenkins install script, the Job DSL job, the Trivy
+  gate and the Jib push to Artifact Registry are untested together.
 
 ## Cost
 
-GKE nodes (4 × e2-standard-2), the cluster fee, 2 HAProxy VMs, load balancer forwarding rules,
-Cloud NAT and reserved IPs bill by the hour while the lab is up. The state bucket costs
-close to nothing. Keep a budget alert on the project.
+GKE nodes (4 × e2-standard-2), the cluster fee, 2 HAProxy VMs, the Jenkins VM (e2-standard-2 plus a 30 GB disk),
+load balancer forwarding rules, Cloud NAT and reserved IPs bill by the hour while the lab is up. The state bucket
+and the image registry cost close to nothing. Keep a budget alert on the project.
