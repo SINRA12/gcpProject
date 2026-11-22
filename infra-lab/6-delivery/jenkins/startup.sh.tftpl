@@ -72,20 +72,24 @@ umask 077
 umask 022
 chown -R jenkins:jenkins $JENKINS_HOME
 
-echo "== HTTPS certificate (self-signed, for the public address ${public_ip})"
-# Plain HTTP stays on localhost (the IAP tunnel). Anything coming over the internet uses HTTPS, so the
-# admin password is not sent in clear text. The certificate is self-signed, so browsers warn once.
+echo "== HTTPS (only when Jenkins has a public address: '${public_ip}')"
+# Plain HTTP stays on localhost (the IAP tunnel). With a public IP, Jenkins also serves HTTPS, so the admin
+# password is not sent in clear text. The certificate is self-signed, so browsers warn once.
 # The keystore password is not a secret worth protecting: the file is readable only by the jenkins user.
-mkdir -p $JENKINS_HOME/tls
-if [ ! -f $JENKINS_HOME/tls/keystore.p12 ]; then
-  keytool -genkeypair -alias jenkins -keyalg RSA -keysize 2048 -validity 825 \
-    -dname "CN=jenkins" -ext "san=ip:${public_ip}" \
-    -storetype PKCS12 -keystore $JENKINS_HOME/tls/keystore.p12 -storepass changeit
+: > /etc/jenkins/https.env
+if [ -n "${public_ip}" ]; then
+  mkdir -p $JENKINS_HOME/tls
+  if [ ! -f $JENKINS_HOME/tls/keystore.p12 ]; then
+    keytool -genkeypair -alias jenkins -keyalg RSA -keysize 2048 -validity 825 \
+      -dname "CN=jenkins" -ext "san=ip:${public_ip}" \
+      -storetype PKCS12 -keystore $JENKINS_HOME/tls/keystore.p12 -storepass changeit
+  fi
+  chown -R jenkins:jenkins $JENKINS_HOME/tls
+  chmod 600 $JENKINS_HOME/tls/keystore.p12
+  echo "JENKINS_HTTPS_ARGS=--httpsPort=8443 --httpsListenAddress=0.0.0.0 --httpsKeyStore=$JENKINS_HOME/tls/keystore.p12 --httpsKeyStoreType=PKCS12 --httpsKeyStorePassword=changeit" > /etc/jenkins/https.env
 fi
-chown -R jenkins:jenkins $JENKINS_HOME/tls
-chmod 600 $JENKINS_HOME/tls/keystore.p12
 
-echo "== Jenkins service (plain HTTP on localhost for the tunnel, HTTPS on all interfaces; the firewall limits who can connect)"
+echo "== Jenkins service (plain HTTP on localhost for the tunnel, plus HTTPS if there is a public IP)"
 cat > /etc/systemd/system/jenkins.service <<'UNIT'
 [Unit]
 Description=Jenkins
@@ -97,7 +101,8 @@ User=jenkins
 Environment=JENKINS_HOME=/var/lib/jenkins
 Environment=CASC_JENKINS_CONFIG=/var/lib/jenkins/casc
 EnvironmentFile=/etc/jenkins/secrets.env
-ExecStart=/usr/bin/java -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -jar /opt/jenkins/jenkins.war --httpPort=8080 --httpListenAddress=127.0.0.1 --httpsPort=8443 --httpsListenAddress=0.0.0.0 --httpsKeyStore=/var/lib/jenkins/tls/keystore.p12 --httpsKeyStoreType=PKCS12 --httpsKeyStorePassword=changeit
+EnvironmentFile=/etc/jenkins/https.env
+ExecStart=/usr/bin/java -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -jar /opt/jenkins/jenkins.war --httpPort=8080 --httpListenAddress=127.0.0.1 $JENKINS_HTTPS_ARGS
 Restart=on-failure
 RestartSec=10
 

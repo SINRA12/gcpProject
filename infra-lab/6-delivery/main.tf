@@ -44,6 +44,10 @@ locals {
   jenkins_war_sha256     = "d98032d2401c540a35613a82ed358921fcf3166d5e6eaaaf60a7941845be3251"
   plugin_manager_version = "2.16.0"
   trivy_version          = "0.76.2"
+
+  jenkins_public = length(var.jenkins_ui_ips) > 0
+  jenkins_ip     = local.jenkins_public ? google_compute_address.jenkins[0].address : ""
+  jenkins_url    = local.jenkins_public ? "https://${local.jenkins_ip}:8443/" : "http://localhost:8080/"
 }
 
 provider "google" {
@@ -101,8 +105,10 @@ resource "random_password" "jenkins" {
   special = false
 }
 
-# Jenkins' own public IP, so it can be reached from your laptop. It is not behind the load balancer.
+# Optional: Jenkins' own public IP, so it can be reached from your laptop (not behind the load balancer).
+# Off by default (jenkins_ui_ips = []): the IAP tunnel needs no public IP and no quota.
 resource "google_compute_address" "jenkins" {
+  count        = local.jenkins_public ? 1 : 0
   name         = "jenkins-ip"
   region       = var.region
   address_type = "EXTERNAL"
@@ -112,13 +118,12 @@ data "google_compute_subnetwork" "lab" {
   self_link = local.p.subnet_self_link
 }
 
-# Only your IPs may connect, and only to the HTTPS port. With no IPs listed there is no rule at all,
-# and the only way in is the IAP tunnel.
+# Only your IPs may connect, and only to the HTTPS port. Created only when jenkins_ui_ips is set.
 resource "google_compute_firewall" "jenkins_ui" {
-  count         = length(var.my_ips) > 0 ? 1 : 0
+  count         = local.jenkins_public ? 1 : 0
   name          = "lab-allow-jenkins-ui"
   network       = data.google_compute_subnetwork.lab.network
-  source_ranges = var.my_ips
+  source_ranges = var.jenkins_ui_ips
   target_tags   = ["jenkins"]
 
   allow {
@@ -143,13 +148,16 @@ resource "google_compute_instance" "jenkins" {
     }
   }
 
-  # The access_config block gives the VM its own public IP. Who may connect is decided by the
-  # firewall rule above (your IPs only). The IAP tunnel (the lab-allow-iap-ssh rule) still works too.
+  # No public IP unless jenkins_ui_ips is set; downloads go out through Cloud NAT and the IAP tunnel
+  # (the lab-allow-iap-ssh rule) always works. With an IP, the firewall rule above decides who may connect.
   network_interface {
     subnetwork = local.p.subnet_self_link
 
-    access_config {
-      nat_ip = google_compute_address.jenkins.address
+    dynamic "access_config" {
+      for_each = local.jenkins_public ? [1] : []
+      content {
+        nat_ip = local.jenkins_ip
+      }
     }
   }
 
@@ -165,13 +173,13 @@ resource "google_compute_instance" "jenkins" {
       plugin_manager_version = local.plugin_manager_version
       trivy_version          = local.trivy_version
       plugins                = file("${path.module}/jenkins/plugins.txt")
-      public_ip              = google_compute_address.jenkins.address
+      public_ip              = local.jenkins_ip
       jcasc = templatefile("${path.module}/jenkins/jenkins.yaml.tftpl", {
         project_id   = var.project_id
         region       = var.region
         ar_repo      = var.ar_repo
         git_repo_url = var.git_repo_url
-        jenkins_url  = "https://${google_compute_address.jenkins.address}:8443/"
+        jenkins_url  = local.jenkins_url
       })
     })
 

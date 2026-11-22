@@ -7,8 +7,8 @@ variable "state_bucket" {
   type        = string
 }
 
-variable "my_ips" {
-  description = "CIDRs allowed to reach the Jenkins web UI on its own public IP (HTTPS, port 8443). The same list as 4-edge uses for Cloud Armor. Empty: no firewall rule, so Jenkins is reachable only through the IAP tunnel."
+variable "jenkins_ui_ips" {
+  description = "CIDRs allowed to reach the Jenkins web UI on its own public IP (HTTPS, port 8443). Empty (the default): Jenkins gets no public IP at all and is reachable only through the IAP tunnel. A public IP counts against the regional IN_USE_ADDRESSES quota, which is 4 on new projects."
   type        = list(string)
   default     = []
 }

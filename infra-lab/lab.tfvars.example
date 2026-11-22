@@ -33,5 +33,6 @@ record_name        = "lab"
 # git_repo_url         = "https://github.com/SINRA12/gcpProject.git"
 # gitops_revision      = "main"    # a branch name, to try the chart before merging (Jenkins only tags main)
 # jenkins_machine_type = "e2-standard-2"
-# my_ips also controls who can open Jenkins on its own public IP (HTTPS, port 8443). Add your laptop's IP here
-# (curl ifconfig.me), for example my_ips = ["203.0.113.10/32", "198.51.100.7/32"]
+# Optional: give Jenkins its own public IP, reachable over HTTPS (8443) only from these CIDRs. Default [] = no
+# public IP, use the IAP tunnel. Needs one free regional IN_USE_ADDRESSES (the quota is 4 on new projects).
+# jenkins_ui_ips = ["203.0.113.10/32"]

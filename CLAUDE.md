@@ -95,8 +95,9 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket, and (ful
   The Jenkins VM is Debian 13 with JDK 21, because Jenkins 2.580 refuses to start on Java 17 (found live: the first
   `up` used Debian 12 and JDK 17, and the service restarted in a loop). Maven compiles the app there with
   `--release 17`; not yet confirmed on a live lab.
-  Jenkins has its own static public IP (`jenkins_url`, HTTPS 8443, self-signed certificate made at boot); the firewall
-  rule admits only `my_ips` (shared with Cloud Armor; no IPs = no rule) and the IAP tunnel still works. Unconfirmed live.
+  Jenkins is reached through the IAP tunnel and has no public IP by default (found live: a public IP hit the regional
+  `IN_USE_ADDRESSES` quota of 4). Setting `jenkins_ui_ips` adds a static IP, a firewall rule for those CIDRs and HTTPS
+  8443 with a self-signed certificate; unconfirmed live.
 - GitHub only runs workflows from the repository root's `.github/workflows/`, but ours sit in
   `infra-lab/.github/workflows/` (the repo root is the folder above `infra-lab/`), so `pr.yml` and `lab.yml` probably
   never run. Unverified; check the Actions tab. The repository is `SINRA12/gcpProject`, with no `tiketRakesh/gcpSetUp` references left in the docs.

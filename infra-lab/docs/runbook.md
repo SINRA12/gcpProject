@@ -304,12 +304,11 @@ read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 Logins and commands: `./lab.sh outputs delivery` prints both passwords and these commands.
 
 ```bash
-# Jenkins from your laptop: open the jenkins_url output (https://<its own public IP>:8443/). The certificate is
-# self-signed, so the browser warns once: accept it. User admin. Only the IPs in my_ips can connect.
-# lab.sh writes my_ips with the Cloud Shell's IP; add your laptop's (curl ifconfig.me) to lab.tfvars as
-# "x.x.x.x/32", then ./lab.sh up delivery. A home IP changes now and then: update the list when it does.
-# Jenkins from anywhere else (Cloud Shell too): the IAP tunnel, then http://localhost:8080
-# (Cloud Shell: Web Preview, change the port to 8080).
+# Jenkins: run the tunnel command below, leave it open, then open http://localhost:8080 (Cloud Shell: Web Preview,
+# change the port to 8080). User admin. No public IP is needed.
+# Optional, from your laptop's browser: set jenkins_ui_ips = ["x.x.x.x/32"] in lab.tfvars (curl ifconfig.me) and run
+# ./lab.sh up delivery. Jenkins then gets its own public IP (jenkins_url output, HTTPS 8443, self-signed certificate,
+# only those IPs). It uses one of the 4 regional IN_USE_ADDRESSES in a new project, so it is off by default.
 gcloud compute ssh jenkins --zone ZONE --project PROJECT --tunnel-through-iap -- -L 8080:localhost:8080
 
 # Argo CD: point kubectl at the flight cluster once, then forward the port and open http://localhost:8081
@@ -368,7 +367,7 @@ while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Jenkins URL times out from the laptop | Your IP is not in `my_ips` (or changed): `curl ifconfig.me`, fix `lab.tfvars`, `./lab.sh up delivery`. With `my_ips = []` there is no firewall rule at all. |
+| Jenkins URL times out from the laptop | Only applies if you set `jenkins_ui_ips`: your IP is not in it (or changed). `curl ifconfig.me`, fix `lab.tfvars`, `./lab.sh up delivery`. Failing that, use the tunnel. A creation error `IN_USE_ADDRESSES exceeded` means the region's 4 public IPs are used: leave `jenkins_ui_ips` empty. |
 | Cannot reach Jenkins through the tunnel | The VM is still installing. SSH in (`gcloud compute ssh jenkins --zone ZONE --tunnel-through-iap`), then `sudo journalctl -u google-startup-scripts -n 50 --no-pager` for the install, `sudo systemctl status jenkins` and `sudo journalctl -u jenkins -n 50 --no-pager`. |
 | `systemctl status jenkins` shows `activating (auto-restart)` again and again | Jenkins is exiting at once. `sudo journalctl -u jenkins -n 15 --no-pager` says why. The message `older than the minimum required version (Java 21)` means the VM has too old a JDK: this Jenkins needs Java 21 or 25, which is why the VM runs Debian 13 with `openjdk-21`. After changing the image or the packages, run `./lab.sh up delivery` (the VM is replaced). |
 | The `flight-booking-be` job is missing | The Configuration as Code file failed to load. `sudo journalctl -u jenkins \| grep -i -E 'casc\|configuration'` on the VM; in Jenkins, Manage Jenkins, Configuration as Code shows the same. |
@@ -385,8 +384,7 @@ while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type
 
 Lab shortcuts to know about: the Jenkins admin password and the GitHub token travel as instance metadata (a team would
 keep them in Secret Manager); Jenkins plugins are installed at their newest compatible version on the first boot, not
-pinned (list them afterwards in Manage Jenkins, Plugins, and pin them); Jenkins has its own public IP, open only to `my_ips` on
-HTTPS 8443 with a self-signed certificate (plain HTTP stays on localhost, for the tunnel), and builds on its own VM; Argo CD runs without TLS because the only way in is `kubectl port-forward`.
+pinned (list them afterwards in Manage Jenkins, Plugins, and pin them); Jenkins has no public IP by default (IAP tunnel only; optional public HTTPS for `jenkins_ui_ips`, self-signed) and builds on its own VM; Argo CD runs without TLS because the only way in is `kubectl port-forward`.
 
 ## Troubleshooting
 

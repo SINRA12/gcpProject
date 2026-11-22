@@ -6,8 +6,8 @@ output "app_url" {
 output "image_repository" { value = local.image_repository }
 
 output "jenkins_url" {
-  description = "Jenkins on its own public IP: HTTPS with a self-signed certificate (the browser warns once), only reachable from the IPs in my_ips"
-  value       = "https://${google_compute_address.jenkins.address}:8443/"
+  description = "With jenkins_ui_ips set: Jenkins on its own public IP, HTTPS with a self-signed certificate (the browser warns once), reachable only from those IPs. Otherwise the tunnel address."
+  value       = local.jenkins_url
 }
 
 output "jenkins_tunnel_command" {
