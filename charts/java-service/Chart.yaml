@@ -1,0 +1,6 @@
+apiVersion: v2
+name: java-service
+description: A reusable chart for a Java backend: Deployment, Service, Ingress, PodMonitor and PodDisruptionBudget
+type: application
+version: 0.1.0
+appVersion: "1.0"

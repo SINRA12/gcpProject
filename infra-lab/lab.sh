@@ -12,13 +12,17 @@
 #   ./lab.sh check    terraform fmt + validate (no cloud access needed)
 #   ./lab.sh status   show how many resources each stage manages
 #   ./lab.sh test     curl the load balancer (and Cloudflare URL if enabled)
-# A stage can be given as 1-5, or by name: platform, k8s, cloudflare, edge, observability
+# A stage can be given as 1-6, or by name: platform, k8s, cloudflare, edge, observability, delivery
 # (the full directory name such as 1-platform also works).
+# Stage 6 (delivery) installs Jenkins and Argo CD. Jenkins needs a GitHub token to commit image
+# tags: export GITHUB_TOKEN=... before ./lab.sh up (docs/runbook.md, section 9).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(1-platform 2-k8s 3-cloudflare 4-edge 5-observability)
+STAGES=(1-platform 2-k8s 3-cloudflare 4-edge 5-observability 6-delivery)
 VARS="$PWD/lab.tfvars"
+# Artifact Registry repository for the application images (also the default in 6-delivery/variables.tf)
+REGISTRY_REPO="lab-apps"
 COLOR=""; [[ -n "${CI:-}" ]] && COLOR="-no-color"
 
 need_vars() {
@@ -88,6 +92,22 @@ ensure_gcp() {
   fi
 }
 
+# The image registry is created here, not by Terraform, so ./lab.sh down leaves it in place. Git
+# records which image tag should run; if the registry were destroyed with the lab, the next
+# ./lab.sh up would deploy a tag whose image no longer exists. An empty repository costs nothing.
+# (In CI, bootstrap/setup-gcp.sh creates it.)
+ensure_registry() {
+  $LOCAL || return 0
+  local project region
+  project=$(tfvar project_id); region=$(tfvar region)
+  gcloud services enable artifactregistry.googleapis.com --project "$project"
+  if ! gcloud artifacts repositories describe "$REGISTRY_REPO" --location "$region" --project "$project" >/dev/null 2>&1; then
+    echo "Creating Artifact Registry repository $REGISTRY_REPO in $region ..."
+    gcloud artifacts repositories create "$REGISTRY_REPO" --repository-format=docker \
+      --location "$region" --project "$project" --description="Images for the lab applications"
+  fi
+}
+
 tf() {  # tf <stage> <args...>
   local stage=$1; shift
   echo -e "\n=== $stage: terraform $1 ==="
@@ -108,7 +128,7 @@ has_resources() {  # true if the stage currently manages any resources
 active_stages() {
   echo 1-platform 2-k8s
   if cloudflare_enabled; then echo 3-cloudflare; fi
-  echo 4-edge 5-observability
+  echo 4-edge 5-observability 6-delivery
 }
 
 # Turn "1", "platform" or "1-platform" into the stage directory name
@@ -119,7 +139,7 @@ resolve_stage() {
       echo "$s"; return
     fi
   done
-  echo "Unknown stage '$in'. Use one of: ${STAGES[*]} (or just 1-5, platform, k8s, cloudflare, edge, observability)." >&2
+  echo "Unknown stage '$in'. Use one of: ${STAGES[*]} (or just 1-6, platform, k8s, cloudflare, edge, observability, delivery)." >&2
   exit 1
 }
 
@@ -130,6 +150,7 @@ upstream_of() {
     2-k8s|3-cloudflare) echo 1-platform ;;
     4-edge) echo 1-platform; if cloudflare_enabled; then echo 3-cloudflare; fi ;;
     5-observability) echo 1-platform 2-k8s ;;
+    6-delivery) echo 1-platform 2-k8s 5-observability ;;  # the app's PodMonitor needs stage 5's CRDs
   esac
 }
 
@@ -143,9 +164,10 @@ require_upstream() {
 # Stages that read <stage>'s outputs, so destroying <stage> first would break them
 downstream_of() {
   case "$1" in
-    1-platform) echo 2-k8s 3-cloudflare 4-edge 5-observability ;;
-    2-k8s) echo 5-observability ;;
+    1-platform) echo 2-k8s 3-cloudflare 4-edge 5-observability 6-delivery ;;
+    2-k8s) echo 5-observability 6-delivery ;;
     3-cloudflare) echo 4-edge ;;
+    5-observability) echo 6-delivery ;;
   esac
 }
 
@@ -158,6 +180,15 @@ require_enabled() {
 apply_stage() {
   require_enabled "$1"
   init_stage "$1"
+  if [[ "$1" == "6-delivery" ]]; then
+    # Jenkins needs a GitHub token to commit the new image tag. It comes from the environment only.
+    export TF_VAR_github_token="${GITHUB_TOKEN:-}"
+    if [[ -z "$TF_VAR_github_token" ]]; then
+      echo "NOTE: GITHUB_TOKEN is not set. Jenkins will build and push images but cannot commit the"
+      echo "      new tag, so nothing new gets deployed. To fix it, create a token (docs/runbook.md,"
+      echo "      section 9), then: export GITHUB_TOKEN=...   and run   ./lab.sh up delivery"
+    fi
+  fi
   tf "$1" apply -auto-approve -input=false -compact-warnings $COLOR -var-file="$VARS"
 }
 
@@ -209,6 +240,7 @@ STAGE_ARG="${2:-}"
 case "${1:-}" in
   up)
     ensure_terraform; ensure_tfvars; need_vars; ensure_gcp
+    if [[ -z "$STAGE_ARG" || "$(resolve_stage "$STAGE_ARG")" == "6-delivery" ]]; then ensure_registry; fi
     if [[ -n "$STAGE_ARG" ]]; then
       s=$(resolve_stage "$STAGE_ARG")
       if [[ "$s" == "3-cloudflare" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
@@ -229,6 +261,7 @@ case "${1:-}" in
     echo -e "\nLab is up. Load balancer IP: ${LB_IP:-unknown}"
     echo "It can take 3-5 minutes to start serving. Then try:  ./lab.sh test"
     echo "or from anywhere:  curl http://${LB_IP:-LB_IP}/flight/cart"
+    echo "Jenkins and Argo CD: ./lab.sh outputs delivery   (they build and deploy from GitHub's main branch)"
     echo "When you finish:   ./lab.sh down"
     ;;
 
@@ -248,10 +281,11 @@ case "${1:-}" in
       echo -e "\n$s is down."
       exit 0
     fi
-    for s in 5-observability 4-edge 3-cloudflare 2-k8s 1-platform; do
+    for s in 6-delivery 5-observability 4-edge 3-cloudflare 2-k8s 1-platform; do
       destroy_stage "$s"
     done
     echo -e "\nLab is down. Check Billing > Reports tomorrow to confirm charges stopped."
+    echo "The image registry ($REGISTRY_REPO) was kept on purpose: it costs almost nothing and keeps the deployed image tag valid."
     ;;
 
   plan)
@@ -277,6 +311,10 @@ case "${1:-}" in
         echo -e "\n=== $s: skipped (2-k8s not applied yet) ==="
         continue
       fi
+      if [[ "$s" == "6-delivery" ]] && ! { has_resources 2-k8s && has_resources 5-observability; }; then
+        echo -e "\n=== $s: skipped (2-k8s or 5-observability not applied yet) ==="
+        continue
+      fi
       if [[ "$s" == "4-edge" ]] && cloudflare_enabled && ! has_resources 3-cloudflare; then
         echo -e "\n=== $s: skipped (3-cloudflare not applied yet) ==="
         continue
@@ -294,7 +332,8 @@ case "${1:-}" in
       terraform -chdir="$s" init -backend=false -input=false $COLOR >/dev/null
       tf "$s" validate $COLOR
     done
-    bash -n lab.sh bootstrap/setup-gcp.sh && echo -e "\nShell scripts: syntax OK"
+    for f in lab.sh bootstrap/setup-gcp.sh ../apps/flight-booking-be/ci/*.sh; do bash -n "$f"; done
+    echo -e "\nShell scripts: syntax OK"
     ;;
 
   status)
@@ -314,6 +353,10 @@ case "${1:-}" in
       # terraform hides sensitive outputs in the list above, so print the Grafana password too
       echo "grafana_admin_password = $(terraform -chdir="$s" output -raw grafana_admin_password 2>/dev/null || echo '(not available yet)')"
     fi
+    if [[ "$s" == "6-delivery" ]]; then
+      echo "jenkins_admin_password = $(terraform -chdir="$s" output -raw jenkins_admin_password 2>/dev/null || echo '(not available yet)')"
+      echo "argocd_admin_password  = $(terraform -chdir="$s" output -raw argocd_admin_password 2>/dev/null || echo '(not available yet)')"
+    fi
     ;;
 
   test)
@@ -328,6 +371,11 @@ case "${1:-}" in
     if has_resources 5-observability; then
       printf '%-16s %s\n' /grafana/api/health "$(curl -s -o /dev/null -w '%{http_code}' "http://$IP/grafana/api/health")"
       echo "Grafana: http://$IP/grafana/  (user admin, password: ./lab.sh outputs observability)"
+    fi
+    if has_resources 6-delivery; then
+      printf '%-16s %s\n' /flight/booking/ "$(curl -s -o /dev/null -w '%{http_code}' "http://$IP/flight/booking/")"
+      echo "flight-booking-be answers 200 once Jenkins has built the first image and Argo CD has deployed it"
+      echo "(a few minutes after ./lab.sh up). Jenkins and Argo CD logins: ./lab.sh outputs delivery"
     fi
     if cloudflare_enabled && has_resources 3-cloudflare; then
       URL=$(terraform -chdir=3-cloudflare output -raw url)

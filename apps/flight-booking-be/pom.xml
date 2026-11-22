@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.3</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>lab</groupId>
+  <artifactId>flight-booking-be</artifactId>
+  <version>0.0.1</version>
+  <name>flight-booking-be</name>
+  <description>Sample Java backend for the delivery pipeline (Jenkins builds it, Argo CD deploys it)</description>
+
+  <properties>
+    <java.version>17</java.version>
+    <!-- Where the image goes and what it is called. Jenkins overrides both with -D. -->
+    <image.repo>flight-booking-be</image.repo>
+    <image.tag>dev</image.tag>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+    <!-- /actuator/health (probes) and /actuator/prometheus -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+
+      <!-- Builds the container image straight from the project: no Dockerfile, no Docker daemon.
+           jib:buildTar writes target/jib-image.tar (Jenkins scans that), jib:build pushes. -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <from>
+            <image>gcr.io/distroless/java17-debian12:nonroot</image>
+          </from>
+          <to>
+            <image>${image.repo}</image>
+            <tags>
+              <tag>${image.tag}</tag>
+            </tags>
+          </to>
+          <container>
+            <ports>
+              <port>8080</port>
+              <port>9090</port>
+            </ports>
+            <environment>
+              <APP_VERSION>${image.tag}</APP_VERSION>
+            </environment>
+            <jvmFlags>
+              <jvmFlag>-XX:MaxRAMPercentage=70</jvmFlag>
+            </jvmFlags>
+          </container>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,110 @@
+// CI for flight-booking-be. Jenkins builds and publishes; it never touches the cluster.
+// Deploying is Argo CD's job: this pipeline's last step is a commit that changes the image tag
+// in gitops/flight/flight-booking-be/values.yaml, and Argo CD notices that commit.
+//
+//   every branch:  test -> build the image as a tarball -> scan it
+//   main only:     push the image -> commit the new tag to Git
+//
+// AR_REGION, AR_REPO, GCP_PROJECT and GITOPS_REPO_URL are global environment variables that
+// Terraform sets in Jenkins (infra-lab/6-delivery), so nothing environment-specific lives here.
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    environment {
+        APP_DIR     = 'apps/flight-booking-be'
+        VALUES_FILE = 'gitops/flight/flight-booking-be/values.yaml'
+        IMAGE_REPO  = "${env.AR_REGION}-docker.pkg.dev/${env.GCP_PROJECT}/${env.AR_REPO}/flight-booking-be"
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // The tag is the fingerprint (git tree id) of the app folder: the same code always
+                    // gets the same tag, so rebuilding unchanged code changes nothing in Git.
+                    env.TAG = sh(returnStdout: true, script: "git rev-parse --short=12 HEAD:${env.APP_DIR}").trim()
+
+                    // The tag commit this pipeline pushes touches only gitops/. Building it again would
+                    // find nothing new, so skip it. Exit status 0 means "something outside gitops/ changed".
+                    def hasCodeChange = sh(returnStatus: true, script: '''
+                        files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
+                        [ -z "$files" ] || echo "$files" | grep -qv '^gitops/'
+                    ''') == 0
+                    env.SKIP_BUILD = hasCodeChange ? 'false' : 'true'
+
+                    currentBuild.description = "image tag ${env.TAG}" + (hasCodeChange ? '' : ' (gitops-only commit, nothing to build)')
+                }
+            }
+        }
+
+        stage('Test') {
+            when { expression { env.SKIP_BUILD != 'true' } }
+            steps {
+                dir(env.APP_DIR) {
+                    sh './mvnw -B verify'
+                }
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: "${env.APP_DIR}/target/surefire-reports/*.xml"
+                }
+            }
+        }
+
+        // Build the image into a tar file first and scan that, so a vulnerable image is never published.
+        // Jib builds without a Docker daemon; it rebuilds the same layers when it pushes later.
+        stage('Build image and scan') {
+            when { expression { env.SKIP_BUILD != 'true' } }
+            steps {
+                dir(env.APP_DIR) {
+                    sh './mvnw -B -q jib:buildTar -Dimage.repo="$IMAGE_REPO" -Dimage.tag="$TAG"'
+                    // Fails the build on CRITICAL findings that have a fix available
+                    sh 'trivy image --input target/jib-image.tar --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress'
+                }
+            }
+        }
+
+        stage('Push image') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { env.SKIP_BUILD != 'true' }
+                }
+            }
+            steps {
+                sh 'apps/flight-booking-be/ci/push-image.sh'
+            }
+        }
+
+        // The hand-over to Argo CD
+        stage('Record new tag in Git') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { env.SKIP_BUILD != 'true' }
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-push',
+                                                  usernameVariable: 'GIT_USER',
+                                                  passwordVariable: 'GIT_TOKEN')]) {
+                    sh 'apps/flight-booking-be/ci/bump-tag.sh'
+                }
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            // The image tarball is about 100 MB per build
+            sh 'rm -f "$APP_DIR/target/jib-image.tar"'
+        }
+    }
+}

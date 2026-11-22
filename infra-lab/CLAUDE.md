@@ -24,7 +24,11 @@ The owner is learning infrastructure concepts. When making changes, explain the
 | `3-cloudflare/` | Optional: DNS record + Origin CA cert |
 | `4-edge/` | HAProxy MIG, health check, LB chain, Cloud Armor (optional, `enable_armor`), HTTPS |
 | `5-observability/` | Prometheus (both clusters), Grafana at `/grafana`, dashboards as JSON in `dashboards/`, Helm values in `values/` |
-| `bootstrap/setup-gcp.sh` | One-time: state bucket, CI service account, Workload Identity Federation |
+| `6-delivery/` | Jenkins VM (config as code, plugin list and startup script in `jenkins/`), Argo CD (slim, Helm) and its Application for `flight-booking-be` |
+| `../apps/flight-booking-be/` | Sample Spring Boot service (Java 17, Maven, Jib) with its `Jenkinsfile` and `ci/` scripts. At the repository root, outside `infra-lab/` |
+| `../charts/java-service/` | Reusable Helm chart that Argo CD renders |
+| `../gitops/flight/flight-booking-be/values.yaml` | What Argo CD deploys. Jenkins edits `image.tag` here, one commit per build |
+| `bootstrap/setup-gcp.sh` | One-time: state bucket, Artifact Registry repo, CI service account, Workload Identity Federation |
 | `lab.sh` | Entry point: `up`, `down`, `plan`, `outputs`, `check`, `status`, `test` (`up`/`down`/`plan` take an optional stage) |
 | `scripts/install-terraform-cloudshell.sh` | Installs terraform into `~/bin` on Cloud Shell; `lab.sh` calls it when needed |
 | `docs/runbook.md` | Full walkthrough: setup, testing, logs, teardown, troubleshooting |
@@ -40,12 +44,13 @@ an output in one stage means updating every stage that reads it.
 The owner's workflow is two commands in Google Cloud Shell, from `infra-lab/`:
 `./lab.sh up` and `./lab.sh down`. On a local run (not CI), `up` first does the one-time
 setup itself: installs terraform, writes `lab.tfvars` from gcloud, enables the Cloud Resource
-Manager and Service Usage APIs, creates the `<project>-tfstate` bucket. Keep that automatic.
+Manager and Service Usage APIs, creates the `<project>-tfstate` bucket, and (full `up` or stage 6) creates the
+`lab-apps` Artifact Registry repository. Keep that automatic.
 
 - `./lab.sh check` — fmt + validate, no cloud access. Run before every commit.
 - `./lab.sh plan [stage]` — read-only against the real project.
 - `./lab.sh up [stage]` / `./lab.sh down [stage]` — create / destroy everything, or one
-  stage (`1`-`5`, `platform`, `k8s`, `cloudflare`, `edge`, `observability`). Stages refuse to run out of order.
+  stage (`1`-`6`, `platform`, `k8s`, `cloudflare`, `edge`, `observability`, `delivery`). Stages refuse to run out of order.
 - `./lab.sh outputs [stage]` — print a stage's outputs.
 
 ## Rules
@@ -58,6 +63,10 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket. Keep tha
 - Make changes on a branch and open a pull request; `pr.yml` runs checks and a plan.
 - Keep provider versions pinned in each stage's `required_providers`; bump deliberately.
 - Keep every resource destroyable by `./lab.sh down` (no `prevent_destroy`, no deletion protection).
+  One deliberate exception: the Artifact Registry repository is created by `lab.sh`/`bootstrap`, not Terraform, so
+  `down` leaves it. Git records the image tag that should run, so the image has to outlive the lab.
+- The GitHub token Jenkins uses to commit image tags comes from the `GITHUB_TOKEN` environment variable only
+  (`lab.sh` turns it into `TF_VAR_github_token`). Never write it to a file, a tfvars file or a commit.
 
 ## Known state
 
@@ -72,6 +81,20 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket. Keep tha
 - HAProxy health-checks ingress-nginx's `/healthz` (not the apps) with a proper Host, and the instance group has a
   PROACTIVE update policy (surge 3, no unavailable) so template changes roll out by themselves. Neither has been
   confirmed on a live lab yet. Before this, the check was a bare `GET /flight/cart` that got a 308 and never failed.
+- Stage 6 (delivery) is written and its pieces are tested separately (the app's unit tests and metrics, a Jib
+  tarball build, the tag-bump script against a scratch repo, the Argo CD chart value names), but Terraform has not
+  been run on it and it has not been applied on a live lab. Unconfirmed: the Jenkins startup script, the Job DSL
+  job, the Trivy gate, the Jib push to Artifact Registry, Argo CD syncing the chart.
+- Delivery design: Jenkins is CI only (no cluster access; its service account can only write to the registry).
+  Its last step commits `image.tag` to `gitops/flight/flight-booking-be/values.yaml` on `main`; Argo CD (auto-sync,
+  self-heal, prune) deploys. The tag is the git tree id of `apps/flight-booking-be`, so identical code gets the same
+  tag and `bump-tag.sh` commits nothing twice; a gitops-only commit does not trigger a build. The image repository
+  is passed to Argo CD by Terraform, so the project id stays out of Git. The tag starts as `unset`, so the pods sit
+  in `ImagePullBackOff` until the first Jenkins build. The service is Java 17 (Debian's JDK on the Jenkins VM, the
+  JDK on the owner's Mac, `distroless/java17`); bump `java.version` and the Jib base image together to move to 21 or 25.
+- GitHub only runs workflows from the repository root's `.github/workflows/`, but ours sit in
+  `infra-lab/.github/workflows/` (the repo root is the folder above `infra-lab/`), so `pr.yml` and `lab.yml` probably
+  never run. Unverified; check the Actions tab. The repository is `SINRA12/gcpProject`, with no `tiketRakesh/gcpSetUp` references left in the docs.
 - Stray duplicate copies of `lab.sh`, `lab.yml`, `pr.yml`, `setup-gcp.sh`, `github-setup.md`
   and two zips sit at the repository root; the real files are under `infra-lab/`.
 - ingress-nginx was retired upstream in March 2026; it is kept here only to mirror the
@@ -87,3 +110,8 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket. Keep tha
 - Manage Cloudflare zone settings and WAF rules in Terraform.
 - Post the plan as a pull request comment instead of the job summary.
 - Tighten the CI service account's IAM roles.
+- Argo Rollouts canary (10%, 50%, 100%) for `flight-booking-be`, judged by a Prometheus analysis on the nginx 5xx
+  ratio and p95, with automatic rollback.
+- A second environment (the payment cluster as "prod") with promotion by pull request, and Argo CD registering it.
+- Move the Jenkins and GitHub secrets to Secret Manager; Workload Identity for pods; pin the Jenkins plugin versions.
+- A GitHub webhook instead of Jenkins polling; Jenkins build agents as Kubernetes pods.
