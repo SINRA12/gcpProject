@@ -29,7 +29,7 @@ public class BookingController {
     @GetMapping("/")
     public Map<String, String> info() {
         return Map.of(
-                "service", "flight-booking-be",
+                "service", "flight-booking-be-rakesh",
                 "version", version,
                 "pod", System.getenv().getOrDefault("HOSTNAME", "unknown"));
     }
