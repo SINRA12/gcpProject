@@ -18,7 +18,12 @@ provider "google" {
 }
 
 locals {
-  clusters = toset(["flight", "payment"])
+  # Each cluster's control plane lives in its own /28 outside our VPC (Google manages it and peers it in).
+  # The ranges must not overlap each other or the VPC (10.10.0.0/20 plus pod and service ranges in 10.0.0.0/8).
+  clusters = {
+    flight  = "172.16.0.0/28"
+    payment = "172.16.0.16/28"
+  }
 }
 
 resource "google_project_service" "apis" {
@@ -92,6 +97,19 @@ resource "google_compute_firewall" "lb_health" {
 
 # ---------- GKE clusters ----------
 
+# With private nodes the control plane calls webhooks on the nodes (ingress-nginx admission on 8443, others on
+# 9443). GKE only opens 443 and 10250 itself, so without this rule Helm installs time out on those webhooks.
+resource "google_compute_firewall" "gke_master_webhooks" {
+  name          = "lab-allow-gke-master-webhooks"
+  network       = google_compute_network.vpc.name
+  source_ranges = values(local.clusters)
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8443", "9443", "10250"]
+  }
+}
+
 resource "google_container_cluster" "cluster" {
   for_each = local.clusters
 
@@ -104,6 +122,15 @@ resource "google_container_cluster" "cluster" {
 
   # VPC-native: pods get IPs from GKE-managed secondary ranges
   ip_allocation_policy {}
+
+  # Private nodes: no public IP per node (public IPs count against the regional IN_USE_ADDRESSES quota,
+  # which is only 4 on new projects). Nodes reach the internet through Cloud NAT above. The control plane
+  # keeps its public endpoint, so kubectl and Helm from Cloud Shell or a laptop still work.
+  private_cluster_config {
+    enable_private_nodes    = true
+    enable_private_endpoint = false
+    master_ipv4_cidr_block  = each.value
+  }
 
   release_channel {
     channel = "REGULAR"

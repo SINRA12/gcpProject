@@ -374,6 +374,7 @@ while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type
 
 | Symptom | Cause and fix |
 | --- | --- |
+| `Quota IN_USE_ADDRESSES exceeded` | Public IPs are capped at 4 per region on new projects. Stage 1 now makes the GKE nodes private so they use none. If it still happens, `gcloud compute addresses list` and `gcloud compute instances list` show what holds them. |
 | Jenkins URL times out from the laptop | Only applies if you set `jenkins_ui_ips`: your IP is not in it (or changed). `curl ifconfig.me`, fix `lab.tfvars`, `./lab.sh up delivery`. Failing that, use the tunnel. A creation error `IN_USE_ADDRESSES exceeded` means the region's 4 public IPs are used: leave `jenkins_ui_ips` empty. |
 | Cannot reach Jenkins through the tunnel | The VM is still installing. SSH in (`gcloud compute ssh jenkins --zone ZONE --tunnel-through-iap`), then `sudo journalctl -u google-startup-scripts -n 50 --no-pager` for the install, `sudo systemctl status jenkins` and `sudo journalctl -u jenkins -n 50 --no-pager`. |
 | `systemctl status jenkins` shows `activating (auto-restart)` again and again | Jenkins is exiting at once. `sudo journalctl -u jenkins -n 15 --no-pager` says why. The message `older than the minimum required version (Java 21)` means the VM has too old a JDK: this Jenkins needs Java 21 or 25, which is why the VM runs Debian 13 with `openjdk-21`. After changing the image or the packages, run `./lab.sh up delivery` (the VM is replaced). |

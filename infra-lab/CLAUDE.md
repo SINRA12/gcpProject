@@ -99,6 +99,10 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket, and (ful
   Jenkins is reached through the IAP tunnel and has no public IP by default (found live: a public IP hit the regional
   `IN_USE_ADDRESSES` quota of 4). Setting `jenkins_ui_ips` adds a static IP, a firewall rule for those CIDRs and HTTPS
   8443 with a self-signed certificate; unconfirmed live.
+- GKE nodes are private (no public IPs; they use Cloud NAT) because public nodes used the whole regional `IN_USE_ADDRESSES`
+  quota of 4 and blocked Jenkins' public IP. The control plane stays public (/28 per cluster in `1-platform`), and the
+  `lab-allow-gke-master-webhooks` firewall rule lets it reach webhooks on 8443/9443. Written but not yet applied on a
+  live lab; if Helm installs time out on admission webhooks, check that rule first.
 - GitHub only runs workflows from the repository root's `.github/workflows/`, but ours sit in
   `infra-lab/.github/workflows/` (the repo root is the folder above `infra-lab/`), so `pr.yml` and `lab.yml` probably
   never run. Unverified; check the Actions tab. The repository is `SINRA12/gcpProject`, with no `tiketRakesh/gcpSetUp` references left in the docs.
