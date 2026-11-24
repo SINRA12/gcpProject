@@ -304,6 +304,13 @@ read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 Logins and commands: `./lab.sh outputs delivery` prints both passwords and these commands.
 
 ```bash
+# From your laptop, both at once (needs gcloud logged in to the lab project, kubectl, gke-gcloud-auth-plugin):
+#   LAB_PROJECT=<project id> ./scripts/laptop-access.sh
+# Jenkins is then http://localhost:8080, Argo CD http://localhost:8081; the script prints both passwords.
+# Sync from the command line instead of the UI (Argo CD CLI, with the script running):
+#   argocd login localhost:8081 --plaintext --username admin --password <argo password>
+#   argocd app sync flight-booking-be
+# Without the CLI: kubectl -n argocd annotate application flight-booking-be argocd.argoproj.io/refresh=hard
 # Jenkins: run the tunnel command below, leave it open, then open http://localhost:8080 (Cloud Shell: Web Preview,
 # change the port to 8080). User admin. No public IP is needed.
 # Optional, from your laptop's browser: set jenkins_ui_ips = ["x.x.x.x/32"] in lab.tfvars (curl ifconfig.me) and run

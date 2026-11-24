@@ -332,7 +332,7 @@ case "${1:-}" in
       terraform -chdir="$s" init -backend=false -input=false $COLOR >/dev/null
       tf "$s" validate $COLOR
     done
-    for f in lab.sh bootstrap/setup-gcp.sh ../apps/flight-booking-be/ci/*.sh; do bash -n "$f"; done
+    for f in lab.sh bootstrap/setup-gcp.sh scripts/laptop-access.sh ../apps/flight-booking-be/ci/*.sh; do bash -n "$f"; done
     echo -e "\nShell scripts: syntax OK"
     ;;
 

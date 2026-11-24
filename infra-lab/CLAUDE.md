@@ -32,6 +32,7 @@ The owner is learning infrastructure concepts. When making changes, explain the
 | `lab.sh` | Entry point: `up`, `down`, `plan`, `outputs`, `check`, `status`, `test` (`up`/`down`/`plan` take an optional stage) |
 | `scripts/install-terraform-cloudshell.sh` | Installs terraform into `~/bin` on Cloud Shell; `lab.sh` calls it when needed |
 | `docs/runbook.md` | Full walkthrough: setup, testing, logs, teardown, troubleshooting |
+| `scripts/laptop-access.sh` | Opens Jenkins (IAP tunnel, :8080) and Argo CD (port-forward, :8081) on the laptop |
 | `scripts/ci-write-tfvars.sh` | Builds `lab.tfvars` from env vars in CI |
 | `.github/workflows/` | `pr.yml` (check + plan), `lab.yml` (manual up/down, nightly down) |
 
