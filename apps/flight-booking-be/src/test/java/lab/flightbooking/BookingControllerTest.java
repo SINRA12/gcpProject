@@ -25,7 +25,7 @@ class BookingControllerTest {
     void infoSaysWhoIsRunning() throws Exception {
         mvc.perform(get("/"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.service").value("flight-booking-be"));
+                .andExpect(jsonPath("$.service").value("flight-booking-be-rakesh"));
     }
 
     @Test
