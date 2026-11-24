@@ -7,10 +7,10 @@ variable "state_bucket" {
   type        = string
 }
 
-variable "jenkins_ui_ips" {
-  description = "CIDRs allowed to reach the Jenkins web UI on its own public IP (HTTPS, port 8443). Empty (the default): Jenkins gets no public IP at all and is reachable only through the IAP tunnel. A public IP counts against the regional IN_USE_ADDRESSES quota, which is 4 on new projects."
+variable "ui_source_ranges" {
+  description = "CIDRs allowed to reach the Jenkins and Argo CD web UIs on their own public IPs (HTTPS, self-signed certificates, protected by their logins). The default 0.0.0.0/0 means anyone on the internet can reach the login pages. Use specific CIDRs to restrict it. Empty: no public IPs at all, and both UIs are reachable only through the IAP tunnel and kubectl port-forward (scripts/laptop-access.sh). Each public UI uses one regional IN_USE_ADDRESSES (the quota is 4 on new projects)."
   type        = list(string)
-  default     = []
+  default     = ["0.0.0.0/0"]
 }
 
 variable "ar_repo" {

@@ -311,11 +311,14 @@ Logins and commands: `./lab.sh outputs delivery` prints both passwords and these
 #   argocd login localhost:8081 --plaintext --username admin --password <argo password>
 #   argocd app sync flight-booking-be
 # Without the CLI: kubectl -n argocd annotate application flight-booking-be argocd.argoproj.io/refresh=hard
-# Jenkins: run the tunnel command below, leave it open, then open http://localhost:8080 (Cloud Shell: Web Preview,
-# change the port to 8080). User admin. No public IP is needed.
-# Optional, from your laptop's browser: set jenkins_ui_ips = ["x.x.x.x/32"] in lab.tfvars (curl ifconfig.me) and run
-# ./lab.sh up delivery. Jenkins then gets its own public IP (jenkins_url output, HTTPS 8443, self-signed certificate,
-# only those IPs). It uses one of the 4 regional IN_USE_ADDRESSES in a new project, so it is off by default.
+# By default both UIs are public, each on its own IP, with HTTPS (self-signed certificates: the browser warns once,
+# accept it) and their own logins (user admin). ./lab.sh outputs delivery prints the addresses and passwords:
+#   jenkins_url  https://<ip>:8443/        argocd_url  https://<ip>/
+# Anyone on the internet can reach the login pages (ui_source_ranges = ["0.0.0.0/0"]); restrict it with CIDRs in
+# lab.tfvars, or set ui_source_ranges = [] for no public IPs. Then use the tunnel and port-forward below
+# (scripts/laptop-access.sh opens both). Each public UI uses one regional IN_USE_ADDRESSES (4 in a new project).
+# Jenkins through the tunnel: run this, leave it open, then open http://localhost:8080 (Cloud Shell: Web Preview,
+# change the port to 8080).
 gcloud compute ssh jenkins --zone ZONE --project PROJECT --tunnel-through-iap -- -L 8080:localhost:8080
 
 # Argo CD: point kubectl at the flight cluster once, then forward the port and open http://localhost:8081
@@ -375,7 +378,7 @@ while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type
 | Symptom | Cause and fix |
 | --- | --- |
 | `Quota IN_USE_ADDRESSES exceeded` | Public IPs are capped at 4 per region on new projects. Stage 1 now makes the GKE nodes private so they use none. If it still happens, `gcloud compute addresses list` and `gcloud compute instances list` show what holds them. |
-| Jenkins URL times out from the laptop | Only applies if you set `jenkins_ui_ips`: your IP is not in it (or changed). `curl ifconfig.me`, fix `lab.tfvars`, `./lab.sh up delivery`. Failing that, use the tunnel. A creation error `IN_USE_ADDRESSES exceeded` means the region's 4 public IPs are used: leave `jenkins_ui_ips` empty. |
+| Jenkins or Argo CD URL times out | Wait a few minutes (Argo CD's load balancer takes about 2 minutes, Jenkins' VM about 5). If you narrowed `ui_source_ranges`, your IP may not be in it. Failing that, set it to `[]` and use the tunnel and port-forward. A creation error `IN_USE_ADDRESSES exceeded` means the region's 4 public IPs are used. |
 | Cannot reach Jenkins through the tunnel | The VM is still installing. SSH in (`gcloud compute ssh jenkins --zone ZONE --tunnel-through-iap`), then `sudo journalctl -u google-startup-scripts -n 50 --no-pager` for the install, `sudo systemctl status jenkins` and `sudo journalctl -u jenkins -n 50 --no-pager`. |
 | `systemctl status jenkins` shows `activating (auto-restart)` again and again | Jenkins is exiting at once. `sudo journalctl -u jenkins -n 15 --no-pager` says why. The message `older than the minimum required version (Java 21)` means the VM has too old a JDK: this Jenkins needs Java 21 or 25, which is why the VM runs Debian 13 with `openjdk-21`. After changing the image or the packages, run `./lab.sh up delivery` (the VM is replaced). |
 | The `flight-booking-be` job is missing | The Configuration as Code file failed to load. `sudo journalctl -u jenkins \| grep -i -E 'casc\|configuration'` on the VM; in Jenkins, Manage Jenkins, Configuration as Code shows the same. |
@@ -392,7 +395,7 @@ while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type
 
 Lab shortcuts to know about: the Jenkins admin password and the GitHub token travel as instance metadata (a team would
 keep them in Secret Manager); Jenkins plugins are installed at their newest compatible version on the first boot, not
-pinned (list them afterwards in Manage Jenkins, Plugins, and pin them); Jenkins has no public IP by default (IAP tunnel only; optional public HTTPS for `jenkins_ui_ips`, self-signed) and builds on its own VM; Argo CD runs without TLS because the only way in is `kubectl port-forward`.
+pinned (list them afterwards in Manage Jenkins, Plugins, and pin them); both UIs are public by default (`ui_source_ranges`) over HTTPS with self-signed certificates, protected only by their logins; with `ui_source_ranges = []` Jenkins is tunnel-only and Argo CD runs without TLS behind `kubectl port-forward`. Jenkins builds on its own VM.
 
 ## Troubleshooting
 

@@ -96,13 +96,10 @@ Manager and Service Usage APIs, creates the `<project>-tfstate` bucket, and (ful
   The Jenkins VM is Debian 13 with JDK 21, because Jenkins 2.580 refuses to start on Java 17 (found live: the first
   `up` used Debian 12 and JDK 17, and the service restarted in a loop). Maven compiles the app there with
   `--release 17`; not yet confirmed on a live lab.
-  Jenkins is reached through the IAP tunnel and has no public IP by default (found live: a public IP hit the regional
-  `IN_USE_ADDRESSES` quota of 4). Setting `jenkins_ui_ips` adds a static IP, a firewall rule for those CIDRs and HTTPS
-  8443 with a self-signed certificate; unconfirmed live.
-- GKE nodes are private (no public IPs; they use Cloud NAT) because public nodes used the whole regional `IN_USE_ADDRESSES`
-  quota of 4 and blocked Jenkins' public IP. The control plane stays public (/28 per cluster in `1-platform`), and the
-  `lab-allow-gke-master-webhooks` firewall rule lets it reach webhooks on 8443/9443. Written but not yet applied on a
-  live lab; if Helm installs time out on admission webhooks, check that rule first.
+  Jenkins (static IP, HTTPS 8443, self-signed certificate made at boot) and Argo CD (LoadBalancer Service on a
+  reserved IP, HTTPS 443, its own self-signed certificate) are public by default, limited by `ui_source_ranges`
+  (default `0.0.0.0/0`, protected only by their logins; `[]` = no public IPs, tunnel and port-forward). Public IPs
+  count against the regional `IN_USE_ADDRESSES` quota of 4, which is why the GKE nodes are private. Not confirmed live.
 - GitHub only runs workflows from the repository root's `.github/workflows/`, but ours sit in
   `infra-lab/.github/workflows/` (the repo root is the folder above `infra-lab/`), so `pr.yml` and `lab.yml` probably
   never run. Unverified; check the Actions tab. The repository is `SINRA12/gcpProject`, with no `tiketRakesh/gcpSetUp` references left in the docs.

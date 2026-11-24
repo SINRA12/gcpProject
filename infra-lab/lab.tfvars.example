@@ -33,6 +33,7 @@ record_name        = "lab"
 # git_repo_url         = "https://github.com/SINRA12/gcpProject.git"
 # gitops_revision      = "main"    # a branch name, to try the chart before merging (Jenkins only tags main)
 # jenkins_machine_type = "e2-standard-2"
-# Optional: give Jenkins its own public IP, reachable over HTTPS (8443) only from these CIDRs. Default [] = no
-# public IP, use the IAP tunnel. Needs one free regional IN_USE_ADDRESSES (the quota is 4 on new projects).
-# jenkins_ui_ips = ["203.0.113.10/32"]
+# Jenkins and Argo CD are public by default, each on its own IP (HTTPS, self-signed certificate, protected by their
+# logins). ui_source_ranges limits who can connect: the default allows the whole internet. [] = no public IPs, use
+# the IAP tunnel and kubectl port-forward (scripts/laptop-access.sh). Each public UI uses one IN_USE_ADDRESSES.
+# ui_source_ranges = ["0.0.0.0/0"]

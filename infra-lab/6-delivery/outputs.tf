@@ -6,7 +6,7 @@ output "app_url" {
 output "image_repository" { value = local.image_repository }
 
 output "jenkins_url" {
-  description = "With jenkins_ui_ips set: Jenkins on its own public IP, HTTPS with a self-signed certificate (the browser warns once), reachable only from those IPs. Otherwise the tunnel address."
+  description = "Jenkins on its own public IP (HTTPS, self-signed certificate: the browser warns once). Without ui_source_ranges it is the tunnel address."
   value       = local.jenkins_url
 }
 
@@ -27,8 +27,13 @@ output "cluster_credentials_command" {
   value       = "gcloud container clusters get-credentials flight-cluster --zone ${var.zone} --project ${var.project_id}"
 }
 
+output "argocd_url" {
+  description = "Argo CD on its own public IP (HTTPS, self-signed certificate: the browser warns once). Without ui_source_ranges use the port-forward command."
+  value       = local.public ? "https://${google_compute_address.argocd[0].address}/" : "http://localhost:8081 (run argocd_port_forward_command)"
+}
+
 output "argocd_port_forward_command" {
-  description = "Run this, leave it open, then browse to http://localhost:8081 (in Cloud Shell: Web Preview on port 8081)"
+  description = "Only needed without ui_source_ranges. Run this, leave it open, then browse to http://localhost:8081 (in Cloud Shell: Web Preview on port 8081)"
   value       = "kubectl port-forward -n argocd svc/argocd-server 8081:80"
 }
 

@@ -45,9 +45,9 @@ locals {
   plugin_manager_version = "2.16.0"
   trivy_version          = "0.76.2"
 
-  jenkins_public = length(var.jenkins_ui_ips) > 0
-  jenkins_ip     = local.jenkins_public ? google_compute_address.jenkins[0].address : ""
-  jenkins_url    = local.jenkins_public ? "https://${local.jenkins_ip}:8443/" : "http://localhost:8080/"
+  public         = length(var.ui_source_ranges) > 0
+  jenkins_ip     = local.public ? google_compute_address.jenkins[0].address : ""
+  jenkins_url    = local.public ? "https://${local.jenkins_ip}:8443/" : "http://localhost:8080/"
 }
 
 provider "google" {
@@ -106,10 +106,18 @@ resource "random_password" "jenkins" {
 }
 
 # Optional: Jenkins' own public IP, so it can be reached from your laptop (not behind the load balancer).
-# Off by default (jenkins_ui_ips = []): the IAP tunnel needs no public IP and no quota.
+# Only when ui_source_ranges is not empty. Otherwise the IAP tunnel needs no public IP and no quota.
 resource "google_compute_address" "jenkins" {
-  count        = local.jenkins_public ? 1 : 0
+  count        = local.public ? 1 : 0
   name         = "jenkins-ip"
+  region       = var.region
+  address_type = "EXTERNAL"
+}
+
+# Argo CD's public IP: the LoadBalancer Service below uses it, so the address does not change between runs.
+resource "google_compute_address" "argocd" {
+  count        = local.public ? 1 : 0
+  name         = "argocd-ip"
   region       = var.region
   address_type = "EXTERNAL"
 }
@@ -118,12 +126,12 @@ data "google_compute_subnetwork" "lab" {
   self_link = local.p.subnet_self_link
 }
 
-# Only your IPs may connect, and only to the HTTPS port. Created only when jenkins_ui_ips is set.
+# Who may connect to the Jenkins HTTPS port: ui_source_ranges (the default is everyone; the login protects it).
 resource "google_compute_firewall" "jenkins_ui" {
-  count         = local.jenkins_public ? 1 : 0
+  count         = local.public ? 1 : 0
   name          = "lab-allow-jenkins-ui"
   network       = data.google_compute_subnetwork.lab.network
-  source_ranges = var.jenkins_ui_ips
+  source_ranges = var.ui_source_ranges
   target_tags   = ["jenkins"]
 
   allow {
@@ -148,13 +156,13 @@ resource "google_compute_instance" "jenkins" {
     }
   }
 
-  # No public IP unless jenkins_ui_ips is set; downloads go out through Cloud NAT and the IAP tunnel
+  # No public IP unless ui_source_ranges is set; downloads go out through Cloud NAT and the IAP tunnel
   # (the lab-allow-iap-ssh rule) always works. With an IP, the firewall rule above decides who may connect.
   network_interface {
     subnetwork = local.p.subnet_self_link
 
     dynamic "access_config" {
-      for_each = local.jenkins_public ? [1] : []
+      for_each = local.public ? [1] : []
       content {
         nat_ip = local.jenkins_ip
       }
@@ -225,9 +233,9 @@ resource "helm_release" "argocd" {
         "timeout.reconciliation.jitter" = "10s"
       }
       params = {
-        # Plain HTTP inside the cluster. The only way in is kubectl port-forward, and plain HTTP
-        # works with Cloud Shell's Web Preview (a self-signed certificate does not).
-        "server.insecure" = true
+        # Private (ClusterIP, reached by kubectl port-forward): plain HTTP, which works with Cloud Shell's
+        # Web Preview. Public: Argo CD serves HTTPS itself (self-signed), so the login is encrypted.
+        "server.insecure" = !local.public
       }
     }
 
@@ -241,6 +249,13 @@ resource "helm_release" "argocd" {
       resources = {
         requests = { cpu = "50m", memory = "128Mi" }
         limits   = { memory = "256Mi" }
+      }
+      # With ui_source_ranges set, a Google load balancer on the reserved IP above exposes the UI
+      # (HTTPS on 443), limited to those CIDRs. Without it the Service stays inside the cluster.
+      service = {
+        type                     = local.public ? "LoadBalancer" : "ClusterIP"
+        loadBalancerIP           = local.public ? google_compute_address.argocd[0].address : null
+        loadBalancerSourceRanges = local.public ? var.ui_source_ranges : []
       }
     }
     repoServer = {
