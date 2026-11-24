@@ -5,7 +5,7 @@
 # image.repository is not here on purpose: Terraform passes it to Argo CD, so the GCP project
 # id stays out of Git.
 image:
-  tag: "unset"
+  tag: "7920bb3e5caf"
 
 replicaCount: 2
 
