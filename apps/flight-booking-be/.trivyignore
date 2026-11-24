@@ -1,0 +1,9 @@
+# Time-boxed exceptions for the Trivy gate in the Jenkinsfile. Trivy reads this file from the app folder.
+# All four are in the OS layer of the distroless Java 17 base image (gcr.io/distroless/java17-debian12), not in our
+# code. Debian has fixed packages, but Google has not rebuilt the base image yet, so a rebuild cannot clear them.
+# Each line expires on its date: after that the gate blocks again, which forces a re-check (rebuild the base image
+# or move to a newer one) instead of leaving the exceptions here for ever.
+CVE-2026-111497 exp:2026-12-15
+CVE-2026-114820 exp:2026-12-15
+CVE-2026-114938 exp:2026-12-15
+CVE-2026-91403 exp:2026-12-15
